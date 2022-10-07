@@ -22,9 +22,10 @@ var errParseFQDN = errors.New("could not parse FQDN")
 
 var dataTopicRegex = regexp.MustCompile("^v1/agent/(.*)/data$")
 
+// Consumer reads metrics from MQTT and write them to a remote storage.
 type Consumer struct {
 	client paho.Client
-	writer *writer
+	writer *Writer
 }
 
 type metricPayload struct {
@@ -34,6 +35,7 @@ type metricPayload struct {
 	Value     float64 `json:"value"`
 }
 
+// NewConsumer returns a new initialized consumer.
 func NewConsumer(opts Options) *Consumer {
 	c := &Consumer{
 		writer: NewWriter(opts.RemoteWriteURL),
@@ -51,12 +53,11 @@ func NewConsumer(opts Options) *Consumer {
 	return c
 }
 
+// Run starts receiving metrics from MQTT and writing them to the remote storage.
 func (c *Consumer) Run(ctx context.Context) {
 	c.client.Connect()
 
-	select {
-	case <-ctx.Done():
-	}
+	<-ctx.Done()
 }
 
 func (c *Consumer) onConnect(_ paho.Client) {
@@ -114,7 +115,7 @@ func (c *Consumer) onMessage(_ paho.Client, m paho.Message) {
 	}
 
 	// Write the samples to the remote storage.
-	err = c.writer.write(context.Background(), samples)
+	err = c.writer.Write(context.Background(), samples)
 	if err != nil {
 		log.Printf("Failed to write: %v", err)
 	}
@@ -154,20 +155,24 @@ func textToLabels(text string) labels.Labels {
 func decode(input []byte, obj interface{}) error {
 	decoder, err := zlib.NewReader(bytes.NewReader(input))
 	if err != nil {
-		return err
+		return fmt.Errorf("zlib reader: %w", err)
 	}
 
 	err = json.NewDecoder(decoder).Decode(obj)
 	if err != nil {
-		return err
+		return fmt.Errorf("decode JSON: %w", err)
 	}
 
+	// We trust the data coming from Glouton and no other data should come here if authentication is used.
+	//nolint:gosec // G110: Potential DoS vulnerability via decompression bomb
 	_, err = io.Copy(io.Discard, decoder)
 	if err != nil {
-		return err
+		return fmt.Errorf("copy: %w", err)
 	}
 
-	err = decoder.Close()
+	if err := decoder.Close(); err != nil {
+		return fmt.Errorf("close decoder: %w", err)
+	}
 
-	return err
+	return nil
 }

@@ -1,0 +1,19 @@
+#!/bin/sh
+
+set -e
+
+LINTER_VERSION=v1.49.0
+
+if docker volume ls | grep -q squirreldb-ingestor-buildcache; then
+   GO_MOUNT_CACHE="-v squirreldb-ingestor-buildcache:/go/pkg"
+fi
+
+docker run --rm -v "$(pwd)":/app ${GO_MOUNT_CACHE} -e HOME=/go/pkg \
+   -w /app golangci/golangci-lint:${LINTER_VERSION} \
+   sh -c 'go test -race ./...'
+
+docker run --rm -v "$(pwd)":/app ${GO_MOUNT_CACHE} -e HOME=/go/pkg \
+   -e GOOS=linux -e GOARCH=amd64 -w /app golangci/golangci-lint:${LINTER_VERSION} \
+   golangci-lint run
+
+echo "Success"

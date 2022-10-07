@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/url"
 	"time"
@@ -18,10 +19,11 @@ import (
 	"github.com/prometheus/prometheus/storage/remote"
 )
 
-// The timeout of requests sent to the remote write API.
+// The timeout of requests sent to the API.
 const clientTimeout = 10 * time.Second
 
-type writer struct {
+// Writer allows writing to a Prometheus remote write API.
+type Writer struct {
 	client remote.WriteClient
 	buf    []byte
 	pBuf   *proto.Buffer
@@ -34,7 +36,8 @@ type sample struct {
 	timestamp int64
 }
 
-func NewWriter(rawURL string) *writer {
+// NewWriter returns a new initialized writer.
+func NewWriter(rawURL string) *Writer {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		log.Fatalf("Failed to parse remote write URL: %v", err)
@@ -51,7 +54,7 @@ func NewWriter(rawURL string) *writer {
 		log.Fatalf("Failed to create remote write client: %v", err)
 	}
 
-	w := &writer{
+	w := &Writer{
 		client: client,
 		pBuf:   proto.NewBuffer(nil),
 		buf:    []byte{},
@@ -60,8 +63,8 @@ func NewWriter(rawURL string) *writer {
 	return w
 }
 
-// Write samples to the configured prometheus remote write endpoint.
-func (w *writer) write(ctx context.Context, samples []sample) error {
+// Write samples to the configured prometheus remote Write endpoint.
+func (w *Writer) Write(ctx context.Context, samples []sample) error {
 	series := samplesToTimeseries(samples)
 
 	req, err := w.buildWriteRequest(series)
@@ -69,10 +72,14 @@ func (w *writer) write(ctx context.Context, samples []sample) error {
 		return err
 	}
 
-	return w.client.Store(ctx, req)
+	if err := w.client.Store(ctx, req); err != nil {
+		return fmt.Errorf("remote write: %w", err)
+	}
+
+	return nil
 }
 
-func (w *writer) buildWriteRequest(samples []prompb.TimeSeries) ([]byte, error) {
+func (w *Writer) buildWriteRequest(samples []prompb.TimeSeries) ([]byte, error) {
 	req := &prompb.WriteRequest{
 		Timeseries: samples,
 	}
@@ -81,7 +88,7 @@ func (w *writer) buildWriteRequest(samples []prompb.TimeSeries) ([]byte, error) 
 
 	err := w.pBuf.Marshal(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("marshal write request: %w", err)
 	}
 
 	// snappy uses len() to see if it needs to allocate a new slice. Make the
@@ -99,10 +106,11 @@ func samplesToTimeseries(samples []sample) []prompb.TimeSeries {
 
 	for nPending, d := range samples {
 		series[nPending].Labels = labelsToLabelsProto(d.labels, series[nPending].Labels)
-		series[nPending].Samples = []prompb.Sample{{
-			Value:     d.value,
-			Timestamp: d.timestamp,
-		},
+		series[nPending].Samples = []prompb.Sample{
+			{
+				Value:     d.value,
+				Timestamp: d.timestamp,
+			},
 		}
 	}
 

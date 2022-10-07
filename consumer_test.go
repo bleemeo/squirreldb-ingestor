@@ -6,6 +6,8 @@ import (
 )
 
 func TestFQDNFromTopic(t *testing.T) {
+	t.Parallel()
+
 	fqdns := []string{
 		"myfqdn",
 		"aaaa.bbbb",
