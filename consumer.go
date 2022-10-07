@@ -18,6 +18,9 @@ import (
 	"github.com/prometheus/prometheus/promql/parser"
 )
 
+// Delay between connection attempts for the first connection to MQTT.
+const reconnectDelay = 10 * time.Second
+
 var errParseFQDN = errors.New("could not parse FQDN")
 
 var dataTopicRegex = regexp.MustCompile("^v1/agent/(.*)/data$")
@@ -55,9 +58,23 @@ func NewConsumer(opts Options) *Consumer {
 
 // Run starts receiving metrics from MQTT and writing them to the remote storage.
 func (c *Consumer) Run(ctx context.Context) {
-	c.client.Connect()
+	c.connect()
 
 	<-ctx.Done()
+}
+
+func (c *Consumer) connect() {
+	token := c.client.Connect()
+	token.Wait()
+
+	for token.Error() != nil {
+		log.Printf("Failed to connect to MQTT, retry in 10s: %s", token.Error())
+
+		time.Sleep(reconnectDelay)
+
+		token = c.client.Connect()
+		token.Wait()
+	}
 }
 
 func (c *Consumer) onConnect(_ paho.Client) {
