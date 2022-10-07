@@ -1,3 +1,4 @@
-.vscode
+/.vscode
+/consumer
+/dist
 __debug_bin
-consumer

@@ -2,6 +2,6 @@ FROM gcr.io/distroless/base
 
 LABEL maintainer="Bleemeo Docker Maintainers <packaging-team@bleemeo.com>"
 
-COPY consumer /usr/sbin/consumer
+COPY squirreldb-ingestor /usr/sbin/squirreldb-ingestor
 
-CMD ["/usr/sbin/consumer"]
+CMD ["/usr/sbin/squirreldb-ingestor"]
