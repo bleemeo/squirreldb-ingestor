@@ -1,6 +1,6 @@
-FROM busybox
+FROM gcr.io/distroless/base
 
-LABEL MAINTAINER="Bleemeo Docker Maintainers <packaging-team@bleemeo.com>"
+LABEL maintainer="Bleemeo Docker Maintainers <packaging-team@bleemeo.com>"
 
 COPY consumer /usr/sbin/consumer
 

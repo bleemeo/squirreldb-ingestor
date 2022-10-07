@@ -1,4 +1,4 @@
-project_name: open-source-consumer
+project_name: squirreldb-ingestor
 snapshot:
   # Our version is based on the date.
   name_template: '{{ time "06.01.02.150405" }}'
@@ -27,8 +27,8 @@ archives:
   format: binary
 dockers:
 - image_templates:
-  - open-source-consumer:latest
-  - open-source-consumer:{{.Version}}
+  - squirreldb-ingestor:latest
+  - squirreldb-ingestor:{{.Version}}
 checksum:
   name_template: 'checksums.txt'
 changelog:

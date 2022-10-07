@@ -22,8 +22,8 @@ case "$1" in
       exit 1
 esac
 
-if docker volume ls | grep -q open-source-consumer-buildcache; then
-   GO_MOUNT_CACHE="-v open-source-consumer-buildcache:/go/pkg"
+if docker volume ls | grep -q squirreldb-ingestor-buildcache; then
+   GO_MOUNT_CACHE="-v squirreldb-ingestor-buildcache:/go/pkg"
 fi
 
 if [ "${ONLY_GO}" = "1" -a "${WITH_RACE}" != "1" ]; then

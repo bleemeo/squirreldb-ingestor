@@ -10,10 +10,10 @@ import (
 )
 
 type Options struct {
-	RemoteWriteURL string `arg:"env:CONSUMER_REMOTE_WRITE_URL" default:"http://localhost:9201/api/v1/write"`
-	MQTTBrokerURL  string `arg:"env:CONSUMER_MQTT_BROKER_URL" default:"tcp://localhost:1883"`
-	MQTTUsername   string `arg:"env:CONSUMER_MQTT_USERNAME"`
-	MQTTPassword   string `arg:"env:CONSUMER_MQTT_PASSWORD"`
+	RemoteWriteURL string `arg:"env:INGESTOR_REMOTE_WRITE_URL" default:"http://localhost:9201/api/v1/write"`
+	MQTTBrokerURL  string `arg:"env:INGESTOR_MQTT_BROKER_URL" default:"tcp://localhost:1883"`
+	MQTTUsername   string `arg:"env:INGESTOR_MQTT_USERNAME"`
+	MQTTPassword   string `arg:"env:INGESTOR_MQTT_PASSWORD"`
 }
 
 func main() {
