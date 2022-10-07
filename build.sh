@@ -26,16 +26,30 @@ if docker volume ls | grep -q squirreldb-ingestor-buildcache; then
    GO_MOUNT_CACHE="-v squirreldb-ingestor-buildcache:/go/pkg"
 fi
 
+if [ -z "${INGESTOR_VERSION}" ]; then
+   INGESTOR_VERSION=$(date -u +%y.%m.%d.%H%M%S)
+fi
+
+COMMIT=`git rev-parse --short HEAD || echo "unknown"`
+
 if [ "${ONLY_GO}" = "1" -a "${WITH_RACE}" != "1" ]; then
    docker run --rm -e HOME=/go/pkg -e CGO_ENABLED=0 \
       -v $(pwd):/src -w /src ${GO_MOUNT_CACHE} \
       --entrypoint '' \
-      goreleaser/goreleaser:${GORELEASER_VERSION} sh -c "go build . && chown $USER_UID consumer"
+      goreleaser/goreleaser:${GORELEASER_VERSION} \
+      sh -exc "
+      go build -ldflags='-X main.version=${INGESTOR_VERSION} -X main.commit=${COMMIT}' .
+      chown $USER_UID consumer
+      "
 elif [ "${ONLY_GO}" = "1" -a "${WITH_RACE}" = "1"  ]; then
    docker run --rm -e HOME=/go/pkg -e CGO_ENABLED=1 \
       -v $(pwd):/src -w /src ${GO_MOUNT_CACHE} \
       --entrypoint '' \
-      goreleaser/goreleaser:${GORELEASER_VERSION} sh -c "go build -ldflags='-linkmode external -extldflags=-static' -race . && chown $USER_UID consumer"
+      goreleaser/goreleaser:${GORELEASER_VERSION} \
+      sh -exc "
+      go build -ldflags='-X main.version=${INGESTOR_VERSION} -X main.commit=${COMMIT} -linkmode external -extldflags=-static' -race .
+      chown $USER_UID consumer
+      "
 else
    docker run --rm -e HOME=/go/pkg -e CGO_ENABLED=0 \
       -v $(pwd):/src -w /src ${GO_MOUNT_CACHE} \
@@ -44,12 +58,12 @@ else
       -e GORELEASER_PREVIOUS_TAG=0.1.0 \
       -e GORELEASER_CURRENT_TAG=0.1.1 \
       goreleaser/goreleaser:${GORELEASER_VERSION} \
-      sh -exc """
+      sh -exc "
       mkdir -p /go/pkg
       git config --global --add safe.directory /src
       goreleaser check
       go test ./...
       goreleaser --rm-dist --snapshot --parallelism 2
       chown -R $USER_UID dist
-      """
+      "
 fi

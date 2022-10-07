@@ -68,7 +68,7 @@ func (c *Consumer) connect() {
 	token.Wait()
 
 	for token.Error() != nil {
-		log.Printf("Failed to connect to MQTT, retry in 10s: %s", token.Error())
+		log.Printf("Failed to connect to MQTT, retry in %v: %s", reconnectDelay, token.Error())
 
 		time.Sleep(reconnectDelay)
 
