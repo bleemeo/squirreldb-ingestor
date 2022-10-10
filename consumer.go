@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"compress/zlib"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"regexp"
 	"time"
 
@@ -25,7 +28,10 @@ const (
 	storageRetryDelay = 10 * time.Second
 )
 
-var errParseFQDN = errors.New("could not parse FQDN")
+var (
+	errParseFQDN = errors.New("could not parse FQDN")
+	errNotPem    = errors.New("not a PEM file")
+)
 
 var dataTopicRegex = regexp.MustCompile("^v1/agent/(.*)/data$")
 
@@ -66,9 +72,42 @@ func NewConsumer(opts Options) *Consumer {
 	pahoOpts.SetOnConnectHandler(c.onConnect)
 	pahoOpts.SetConnectionLostHandler(onConnectionLost)
 
+	if opts.MQTTSSLInsecure || opts.MQTTCAFile != "" {
+		tlsConfig := &tls.Config{
+			MinVersion:         tls.VersionTLS12,
+			InsecureSkipVerify: opts.MQTTSSLInsecure, //nolint:gosec // G402: TLS InsecureSkipVerify set true.
+		}
+
+		if opts.MQTTCAFile != "" {
+			if rootCAs, err := loadRootCAs(opts.MQTTCAFile); err != nil {
+				log.Err(err).Msgf("Unable to load CAs from %s", opts.MQTTCAFile)
+			} else {
+				tlsConfig.RootCAs = rootCAs
+			}
+		}
+
+		pahoOpts.SetTLSConfig(tlsConfig)
+	}
+
 	c.client = paho.NewClient(pahoOpts)
 
 	return c
+}
+
+func loadRootCAs(caFile string) (*x509.CertPool, error) {
+	rootCAs := x509.NewCertPool()
+
+	certs, err := os.ReadFile(caFile)
+	if err != nil {
+		return nil, err
+	}
+
+	ok := rootCAs.AppendCertsFromPEM(certs)
+	if !ok {
+		return nil, errNotPem
+	}
+
+	return rootCAs, nil
 }
 
 // Run starts receiving metrics from MQTT and writing them to the remote storage.

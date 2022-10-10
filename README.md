@@ -29,11 +29,27 @@ Grab the latest binary [release](https://github.com/bleemeo/squirreldb-ingestor/
 
 The options can be set with environment variables or command line arguments.
 
-Options:
--  `--remotewriteurl` [default: http://localhost:9201/api/v1/write, env: INGESTOR_REMOTE_WRITE_URL]
--  `--mqttbrokerurl` [default: tcp://localhost:1883, env: INGESTOR_MQTT_BROKER_URL]
--  `--mqttusername` [env: INGESTOR_MQTT_USERNAME]
--  `--mqttpassword` [env: INGESTOR_MQTT_PASSWORD]
+-  `--log-level`, env: `INGESTOR_LOG_LEVEL` , default: info  
+Set the log level. The available levels are: trace, debug, info, warn, error, fatal, panic and disabled.  
+
+### Remote storage
+
+-  `--remote-write-url`, env: `INGESTOR_REMOTE_WRITE_URL`, default: http://localhost:9201/api/v1/write  
+The Prometheus remote write API URL.
+
+### MQTT
+
+-  `--mqtt-broker-url`, env: `INGESTOR_MQTT_BROKER_URL`, default: tcp://localhost:1883  
+The MQTT Broker URL, must begin by `tcp://`, or `ssl://`.
+
+-  `--mqtt-username`, `--mqtt-password`, env: `INGESTOR_MQTT_USERNAME`, `INGESTOR_MQTT_PASSWORD`  
+The credentials used to authenticate with MQTT. Note that the username is also used as the client ID, so according to MQTT v3.1 specification, it should not be longer than 23 characters.
+
+-  `--mqtt-ssl-insecure`, env: `INGESTOR_MQTT_SSL_INSECURE`  
+Allow insecure SSL connection.
+
+-  `--mqtt-ca-file`, env: `INGESTOR_MQTT_CA_FILE`  
+Provide your own SSL certificate, this should be the path to a PEM file.
 
 ## Contributing
 
