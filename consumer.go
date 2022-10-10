@@ -18,8 +18,8 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// Delay between connection attempts for the first connection to MQTT.
-const reconnectDelay = 10 * time.Second
+// Delay between connection and subscription attempts.
+const retryDelay = 10 * time.Second
 
 var errParseFQDN = errors.New("could not parse FQDN")
 
@@ -75,10 +75,10 @@ func (c *Consumer) connect(ctx context.Context) {
 	err := c.connectOnce(ctx)
 
 	for err != nil && ctx.Err() == nil {
-		log.Warn().Err(err).Msgf("Failed to connect to MQTT, retry in %v", reconnectDelay)
+		log.Warn().Err(err).Msgf("Failed to connect to MQTT, retry in %s", retryDelay)
 
 		select {
-		case <-time.After(reconnectDelay):
+		case <-time.After(retryDelay):
 		case <-ctx.Done():
 			return
 		}
@@ -105,14 +105,15 @@ func (c *Consumer) onConnect(_ paho.Client) {
 	log.Info().Msg("MQTT connection established")
 
 	token := c.client.Subscribe("v1/agent/+/data", 1, c.onMessage)
-
 	token.Wait()
 
-	if token.Error() != nil {
-		log.Err(token.Error()).Msg("Failed to subscribe")
+	for token.Error() != nil {
+		log.Err(token.Error()).Msgf("Failed to subscribe, retry in %s", retryDelay)
 
-		// TODO: retry
-		return
+		time.Sleep(retryDelay)
+
+		token = c.client.Subscribe("v1/agent/+/data", 1, c.onMessage)
+		token.Wait()
 	}
 }
 
