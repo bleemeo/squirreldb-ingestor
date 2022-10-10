@@ -44,8 +44,16 @@ func NewConsumer(opts Options) *Consumer {
 		writer: NewWriter(opts.RemoteWriteURL),
 	}
 
+	// The MQTT username is used as the client ID.
+	// According to the MQTT v3.1 specification, a client ID must be no longer than 23 characters
+	if len(opts.MQTTUsername) > 23 {
+		log.Fatal().Msgf("MQTT username should be no longer than 23 characters.")
+	}
+
 	pahoOpts := paho.NewClientOptions()
 	pahoOpts.AddBroker(opts.MQTTBrokerURL)
+	pahoOpts.SetCleanSession(false)
+	pahoOpts.SetClientID(opts.MQTTUsername)
 	pahoOpts.SetUsername(opts.MQTTUsername)
 	pahoOpts.SetPassword(opts.MQTTPassword)
 	pahoOpts.SetOnConnectHandler(c.onConnect)
