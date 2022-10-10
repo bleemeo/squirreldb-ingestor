@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	// Delay between connection and subscription attempts to MQTT.
+	// Delay between connection attempts to MQTT.
 	mqttRetryDelay = 10 * time.Second
 	// Delay between write attempts to the remote storage.
 	storageRetryDelay = 10 * time.Second
@@ -54,12 +54,6 @@ type metricPayload struct {
 func NewConsumer(opts Options) *Consumer {
 	c := &Consumer{
 		writer: NewWriter(opts.RemoteWriteURL),
-	}
-
-	// The MQTT username is used as the client ID.
-	// According to the MQTT v3.1 specification, a client ID must be no longer than 23 characters
-	if len(opts.MQTTUsername) > 23 {
-		log.Fatal().Msgf("MQTT username should be no longer than 23 characters.")
 	}
 
 	pahoOpts := paho.NewClientOptions()
@@ -158,13 +152,8 @@ func (c *Consumer) onConnect(_ paho.Client) {
 	token := c.client.Subscribe("v1/agent/+/data", 1, c.onMessage)
 	token.Wait()
 
-	for token.Error() != nil && c.ctx.Err() == nil {
-		log.Err(token.Error()).Msgf("Failed to subscribe, retry in %s", mqttRetryDelay)
-
-		time.Sleep(mqttRetryDelay)
-
-		token = c.client.Subscribe("v1/agent/+/data", 1, c.onMessage)
-		token.Wait()
+	if token.Error() != nil {
+		log.Err(token.Error()).Msgf("Failed to subscribe")
 	}
 }
 

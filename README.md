@@ -43,7 +43,7 @@ The Prometheus remote write API URL.
 The MQTT Broker URL, must begin by `tcp://`, or `ssl://`.
 
 -  `--mqtt-username`, `--mqtt-password`, env: `INGESTOR_MQTT_USERNAME`, `INGESTOR_MQTT_PASSWORD`  
-The credentials used to authenticate with MQTT. Note that the username is also used as the client ID, so according to MQTT v3.1 specification, it should not be longer than 23 characters.
+The credentials used to authenticate with MQTT. Note that the username is also used as the client ID.
 
 -  `--mqtt-ssl-insecure`, env: `INGESTOR_MQTT_SSL_INSECURE`  
 Allow insecure SSL connection.
