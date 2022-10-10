@@ -35,8 +35,8 @@ var (
 
 var dataTopicRegex = regexp.MustCompile("^v1/agent/(.*)/data$")
 
-// Consumer reads metrics from MQTT and write them to a remote storage.
-type Consumer struct {
+// Ingestor reads metrics from MQTT and write them to a remote storage.
+type Ingestor struct {
 	client paho.Client
 	writer *Writer
 	// It's bad practise to store a context in a struct,
@@ -50,9 +50,9 @@ type metricPayload struct {
 	Value       float64 `json:"value"`
 }
 
-// NewConsumer returns a new initialized consumer.
-func NewConsumer(opts Options) *Consumer {
-	c := &Consumer{
+// NewIngestor returns a new initialized ingestor.
+func NewIngestor(opts Options) *Ingestor {
+	c := &Ingestor{
 		writer: NewWriter(opts.RemoteWriteURL),
 	}
 
@@ -104,7 +104,7 @@ func loadRootCAs(caFile string) (*x509.CertPool, error) {
 }
 
 // Run starts receiving metrics from MQTT and writing them to the remote storage.
-func (c *Consumer) Run(ctx context.Context) {
+func (c *Ingestor) Run(ctx context.Context) {
 	c.ctx = ctx
 
 	c.connect(ctx)
@@ -112,7 +112,7 @@ func (c *Consumer) Run(ctx context.Context) {
 	<-ctx.Done()
 }
 
-func (c *Consumer) connect(ctx context.Context) {
+func (c *Ingestor) connect(ctx context.Context) {
 	err := c.connectOnce(ctx)
 
 	for err != nil && ctx.Err() == nil {
@@ -128,7 +128,7 @@ func (c *Consumer) connect(ctx context.Context) {
 	}
 }
 
-func (c *Consumer) connectOnce(ctx context.Context) error {
+func (c *Ingestor) connectOnce(ctx context.Context) error {
 	// Use a timeout to return early if the context is canceled.
 	const timeout = time.Second
 
@@ -146,12 +146,13 @@ func (c *Consumer) connectOnce(ctx context.Context) error {
 	return nil
 }
 
-func (c *Consumer) onConnect(_ paho.Client) {
+func (c *Ingestor) onConnect(_ paho.Client) {
 	log.Info().Msg("MQTT connection established")
 
 	token := c.client.Subscribe("v1/agent/+/data", 1, c.onMessage)
 	token.Wait()
 
+	// If there is an error, the client should reconnect so the subscription will be retried.
 	if token.Error() != nil {
 		log.Err(token.Error()).Msgf("Failed to subscribe")
 	}
@@ -161,7 +162,7 @@ func onConnectionLost(_ paho.Client, err error) {
 	log.Warn().Err(err).Msg("MQTT connection lost")
 }
 
-func (c *Consumer) onMessage(_ paho.Client, m paho.Message) {
+func (c *Ingestor) onMessage(_ paho.Client, m paho.Message) {
 	fqdn, err := fqdnFromTopic(m.Topic())
 	if err != nil {
 		log.Warn().Err(err).Msg("Skip data: %v")
@@ -210,6 +211,9 @@ func (c *Consumer) onMessage(_ paho.Client, m paho.Message) {
 		}
 
 		err = c.writer.Write(context.Background(), samples)
+		if err == nil {
+			log.Info().Msg("Writing to remote storage recovered, resuming normal operation")
+		}
 	}
 }
 

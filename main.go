@@ -56,13 +56,13 @@ func main() {
 
 	log.Logger = log.Output(writer).With().Timestamp().Logger().Level(logLevel)
 
-	// Run the consumer.
+	// Run the ingestor.
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	log.Info().Msgf("Starting Consumer version %s (commit %s)", version, commit)
+	log.Info().Msgf("Starting SquirrelDB Ingestor version %s (commit %s)", version, commit)
 
-	NewConsumer(opts).Run(ctx)
+	NewIngestor(opts).Run(ctx)
 
-	log.Info().Msg("Consumer stopped")
+	log.Info().Msg("SquirrelDB Ingestor stopped")
 }
