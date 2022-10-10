@@ -45,10 +45,9 @@ type Consumer struct {
 }
 
 type metricPayload struct {
-	LabelsText string `json:"labels_text"`
-	// Timestamp in seconds.
-	Timestamp int64   `json:"time"`
-	Value     float64 `json:"value"`
+	LabelsText  string  `json:"labels_text"`
+	TimestampMS int64   `json:"time_ms"`
+	Value       float64 `json:"value"`
 }
 
 // NewConsumer returns a new initialized consumer.
@@ -203,7 +202,7 @@ func (c *Consumer) onMessage(_ paho.Client, m paho.Message) {
 		samples = append(samples, sample{
 			labels:    builder.Labels(),
 			value:     metric.Value,
-			timestamp: metric.Timestamp * 1000,
+			timestamp: metric.TimestampMS,
 		})
 	}
 
