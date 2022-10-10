@@ -44,7 +44,7 @@ if [ "${ONLY_GO}" = "1" -a "${WITH_RACE}" != "1" ]; then
       goreleaser/goreleaser:${GORELEASER_VERSION} \
       sh -exc "
       go build -ldflags='-X main.version=${INGESTOR_VERSION} -X main.commit=${COMMIT}' .
-      chown $USER_UID consumer
+      chown $USER_UID squirreldb-ingestor
       "
 elif [ "${ONLY_GO}" = "1" -a "${WITH_RACE}" = "1"  ]; then
    docker run --rm -e HOME=/go/pkg -e CGO_ENABLED=1 \
@@ -53,7 +53,7 @@ elif [ "${ONLY_GO}" = "1" -a "${WITH_RACE}" = "1"  ]; then
       goreleaser/goreleaser:${GORELEASER_VERSION} \
       sh -exc "
       go build -ldflags='-X main.version=${INGESTOR_VERSION} -X main.commit=${COMMIT} -linkmode external -extldflags=-static' -race .
-      chown $USER_UID consumer
+      chown $USER_UID squirreldb-ingestor
       "
 else
    docker run --rm -e HOME=/go/pkg -e CGO_ENABLED=0 \

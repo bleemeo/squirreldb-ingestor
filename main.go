@@ -11,6 +11,14 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// Variables set during build.
+//
+//nolint:gochecknoglobals
+var (
+	version string = "0.1"
+	commit  string = "unset"
+)
+
 // Options can be configured with environment variables and command line arguments.
 type Options struct {
 	RemoteWriteURL string `arg:"env:INGESTOR_REMOTE_WRITE_URL" default:"http://localhost:9201/api/v1/write"`
@@ -20,14 +28,13 @@ type Options struct {
 	LogLevel       string `arg:"env:INGESTOR_LOG_LEVEL" default:"info" help:"trace, debug, info, warn, error, fatal, panic, disabled"`
 }
 
+// Version implements --version argument.
+func (Options) Version() string {
+	return version
+}
+
 func main() {
-	// log.Info().Msgf("Starting Consumer %s (commit %s)", version, commit)
-
-	ctx := context.Background()
-
-	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
-
+	// Parse arguments.
 	var opts Options
 
 	arg.MustParse(&opts)
@@ -44,6 +51,12 @@ func main() {
 	}
 
 	log.Logger = log.Output(writer).With().Timestamp().Logger().Level(logLevel)
+
+	// Run the consumer.
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	log.Info().Msgf("Starting Consumer version %s (commit %s)", version, commit)
 
 	NewConsumer(opts).Run(ctx)
 
