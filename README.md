@@ -7,6 +7,24 @@ An example Docker Compose with Glouton, SquirrelDB and Grafana is available
 [here](https://github.com/bleemeo/glouton/tree/master/examples/mqtt).
 
 
+## Run
+
+SquirrelDB Ingestor can be run with Docker or as a binary.
+
+### Docker
+
+```sh
+docker run -d --name="squirreldb-ingestor" bleemeo/squirreldb-ingestor
+```
+
+### Binary
+
+Grab the latest binary [release](https://github.com/bleemeo/squirreldb-ingestor/releases/latest) and run it:
+
+```sh
+./squirreldb-ingestor
+```
+
 ## Configuration
 
 The options can be set with environment variables or command line arguments.
@@ -17,21 +35,6 @@ Options:
 -  `--mqttusername` [env: INGESTOR_MQTT_USERNAME]
 -  `--mqttpassword` [env: INGESTOR_MQTT_PASSWORD]
 
-## Build
+## Contributing
 
-Enable cache to speed-up build and lint (optional).
-```sh
-docker volume create squirreldb-ingestor-buildcache
-```
-
-To build the ingestor binary, use the provided script.
-```sh
-./build.sh
-```
-
-## Lint
-
-Glouton uses golangci-lint as linter. You may run it with:
-```sh
-./lint.sh
-```
+See [CONTRIBUTING.md](CONTRIBUTING.md).

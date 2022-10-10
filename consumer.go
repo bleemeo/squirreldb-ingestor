@@ -66,7 +66,7 @@ func (c *Consumer) Run(ctx context.Context) {
 func (c *Consumer) connect(ctx context.Context) {
 	err := c.connectOnce(ctx)
 
-	for err != nil {
+	for err != nil && ctx.Err() == nil {
 		log.Printf("Failed to connect to MQTT, retry in %v: %s", reconnectDelay, err)
 
 		select {

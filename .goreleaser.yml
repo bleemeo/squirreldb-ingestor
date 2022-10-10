@@ -9,14 +9,13 @@ before:
 builds:
 - env:
   - CGO_ENABLED=0
-  goos:
-  - linux
-  goarch:
-  - amd64
-  - arm
-  - "386"
-  goarm:
-  - "6"
+  targets:
+  - linux_amd64
+  - linux_386
+  - linux_arm_6
+  - linux_arm64
+  - windows_amd64
+  - windows_386
 archives:
 - replacements:
     darwin: Darwin
@@ -25,10 +24,6 @@ archives:
     386: i386
     amd64: x86_64
   format: binary
-dockers:
-- image_templates:
-  - squirreldb-ingestor:latest
-  - squirreldb-ingestor:{{.Version}}
 checksum:
   name_template: 'checksums.txt'
 changelog:
