@@ -58,23 +58,39 @@ func NewConsumer(opts Options) *Consumer {
 
 // Run starts receiving metrics from MQTT and writing them to the remote storage.
 func (c *Consumer) Run(ctx context.Context) {
-	c.connect()
+	c.connect(ctx)
 
 	<-ctx.Done()
 }
 
-func (c *Consumer) connect() {
-	token := c.client.Connect()
-	token.Wait()
+func (c *Consumer) connect(ctx context.Context) {
+	err := c.connectOnce(ctx)
 
-	for token.Error() != nil {
-		log.Printf("Failed to connect to MQTT, retry in %v: %s", reconnectDelay, token.Error())
+	for err != nil {
+		log.Printf("Failed to connect to MQTT, retry in %v: %s", reconnectDelay, err)
 
-		time.Sleep(reconnectDelay)
+		select {
+		case <-time.After(reconnectDelay):
+		case <-ctx.Done():
+			return
+		}
 
-		token = c.client.Connect()
-		token.Wait()
+		err = c.connectOnce(ctx)
 	}
+}
+
+func (c *Consumer) connectOnce(ctx context.Context) error {
+	// Use a timeout to return early if the context is canceled.
+	const timeout = time.Second
+
+	token := c.client.Connect()
+	isTimeout := !token.WaitTimeout(timeout)
+
+	for isTimeout && ctx.Err() == nil {
+		isTimeout = !token.WaitTimeout(timeout)
+	}
+
+	return token.Error()
 }
 
 func (c *Consumer) onConnect(_ paho.Client) {
@@ -180,8 +196,8 @@ func decode(input []byte, obj interface{}) error {
 		return fmt.Errorf("decode JSON: %w", err)
 	}
 
-	// We trust the data coming from Glouton and no other data should come here if authentication is used.
-	//nolint:gosec // G110: Potential DoS vulnerability via decompression bomb
+	// G110: Potential DoS vulnerability via decompression bomb.
+	// False positive: copying to discard can't lead to memory exhaustion.
 	_, err = io.Copy(io.Discard, decoder)
 	if err != nil {
 		return fmt.Errorf("copy: %w", err)
