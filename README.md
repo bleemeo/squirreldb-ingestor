@@ -1,11 +1,11 @@
 # SquirrelDB Ingestor
 
-SquirrelDB Ingestor reads metrics sent by Glouton over MQTT and store them in SquirrelDB 
-(or any other components compatible with Prometheus remote write).
+SquirrelDB Ingestor reads metrics sent by [Glouton](https://github.com/bleemeo/glouton) over MQTT 
+and store  them in [SquirrelDB](https://github.com/bleemeo/squirreldb) (or any other component
+compatible with Prometheus remote write).
 
 An example Docker Compose with Glouton, SquirrelDB and Grafana is available
 [here](https://github.com/bleemeo/glouton/tree/master/examples/mqtt).
-
 
 ## Run
 

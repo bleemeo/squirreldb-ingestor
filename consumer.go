@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"regexp"
 	"time"
 
@@ -16,6 +15,7 @@ import (
 
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/promql/parser"
+	"github.com/rs/zerolog/log"
 )
 
 // Delay between connection attempts for the first connection to MQTT.
@@ -67,7 +67,7 @@ func (c *Consumer) connect(ctx context.Context) {
 	err := c.connectOnce(ctx)
 
 	for err != nil && ctx.Err() == nil {
-		log.Printf("Failed to connect to MQTT, retry in %v: %s", reconnectDelay, err)
+		log.Warn().Err(err).Msgf("Failed to connect to MQTT, retry in %v", reconnectDelay)
 
 		select {
 		case <-time.After(reconnectDelay):
@@ -94,27 +94,28 @@ func (c *Consumer) connectOnce(ctx context.Context) error {
 }
 
 func (c *Consumer) onConnect(_ paho.Client) {
-	log.Println("MQTT connection established")
+	log.Info().Msg("MQTT connection established")
 
 	token := c.client.Subscribe("v1/agent/+/data", 1, c.onMessage)
 
 	token.Wait()
 
 	if token.Error() != nil {
-		log.Println("Failed to subscribe:", token.Error())
+		log.Err(token.Error()).Msg("Failed to subscribe")
 
+		// TODO: retry
 		return
 	}
 }
 
 func onConnectionLost(_ paho.Client, err error) {
-	log.Println("MQTT connection lost:", err)
+	log.Warn().Err(err).Msg("MQTT connection lost")
 }
 
 func (c *Consumer) onMessage(_ paho.Client, m paho.Message) {
 	fqdn, err := fqdnFromTopic(m.Topic())
 	if err != nil {
-		log.Printf("Skip data: %v", err)
+		log.Warn().Err(err).Msg("Skip data: %v")
 
 		return
 	}
@@ -124,10 +125,12 @@ func (c *Consumer) onMessage(_ paho.Client, m paho.Message) {
 
 	err = decode(m.Payload(), &metrics)
 	if err != nil {
-		log.Println("Failed to decode:", err)
+		log.Warn().Err(err).Msg("Failed to decode payload")
+
+		return
 	}
 
-	log.Printf("%v: received %d points on %s\n", time.Now().Format("15:04:05"), len(metrics), m.Topic())
+	log.Debug().Str("topic", m.Topic()).Msgf("Received %d points", len(metrics))
 
 	// Convert the metrics to samples.
 	samples := make([]sample, 0, len(metrics))
@@ -150,7 +153,7 @@ func (c *Consumer) onMessage(_ paho.Client, m paho.Message) {
 	// Write the samples to the remote storage.
 	err = c.writer.Write(context.Background(), samples)
 	if err != nil {
-		log.Printf("Failed to write: %v", err)
+		log.Warn().Err(err).Msg("Failed to write points to the remote storage")
 	}
 }
 
@@ -170,7 +173,7 @@ func fqdnFromTopic(topic string) (string, error) {
 func textToLabels(text string) labels.Labels {
 	lbls, err := parser.ParseMetricSelector("{" + text + "}")
 	if err != nil {
-		log.Printf("Failed to decode labels %#v: %v", text, err)
+		log.Warn().Err(err).Msgf("Failed to decode labels '%s'", text)
 
 		return nil
 	}

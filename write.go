@@ -6,7 +6,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/url"
 	"time"
 
@@ -17,6 +16,7 @@ import (
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/prompb"
 	"github.com/prometheus/prometheus/storage/remote"
+	"github.com/rs/zerolog/log"
 )
 
 // The timeout of requests sent to the API.
@@ -40,7 +40,7 @@ type sample struct {
 func NewWriter(rawURL string) *Writer {
 	u, err := url.Parse(rawURL)
 	if err != nil {
-		log.Fatalf("Failed to parse remote write URL: %v", err)
+		log.Fatal().Err(err).Msgf("Failed to parse remote write URL '%s'", rawURL)
 	}
 
 	conf := &remote.ClientConfig{
@@ -51,7 +51,7 @@ func NewWriter(rawURL string) *Writer {
 
 	client, err := remote.NewWriteClient("", conf)
 	if err != nil {
-		log.Fatalf("Failed to create remote write client: %v", err)
+		log.Fatal().Err(err).Msgf("Failed to create remote write client")
 	}
 
 	w := &Writer{

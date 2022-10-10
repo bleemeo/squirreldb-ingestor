@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
-	"log"
+	"os"
 	"os/signal"
 	"syscall"
 
 	arg "github.com/alexflint/go-arg"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 // Options can be configured with environment variables and command line arguments.
@@ -15,10 +17,11 @@ type Options struct {
 	MQTTBrokerURL  string `arg:"env:INGESTOR_MQTT_BROKER_URL" default:"tcp://localhost:1883"`
 	MQTTUsername   string `arg:"env:INGESTOR_MQTT_USERNAME"`
 	MQTTPassword   string `arg:"env:INGESTOR_MQTT_PASSWORD"`
+	LogLevel       string `arg:"env:INGESTOR_LOG_LEVEL" default:"info" help:"trace, debug, info, warn, error, fatal, panic, disabled"`
 }
 
 func main() {
-	log.Println("Starting Consumer")
+	// log.Info().Msgf("Starting Consumer %s (commit %s)", version, commit)
 
 	ctx := context.Background()
 
@@ -29,7 +32,20 @@ func main() {
 
 	arg.MustParse(&opts)
 
+	// Setup logger.
+	writer := zerolog.ConsoleWriter{
+		Out:        os.Stdout,
+		TimeFormat: "15:04:05",
+	}
+
+	logLevel, err := zerolog.ParseLevel(opts.LogLevel)
+	if err != nil {
+		log.Fatal().Msgf("Failed to parse log level: %s", err)
+	}
+
+	log.Logger = log.Output(writer).With().Timestamp().Logger().Level(logLevel)
+
 	NewConsumer(opts).Run(ctx)
 
-	log.Println("Consumer stopped")
+	log.Info().Msg("Consumer stopped")
 }
