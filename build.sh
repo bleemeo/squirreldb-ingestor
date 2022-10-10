@@ -18,7 +18,7 @@ case "$1" in
    *)
       echo "Usage: $0 [go|race]"
       echo "  go: only compile Go"
-      echo "race: only compile Go with race detector"
+      echo "  race: only compile Go with race detector"
       exit 1
 esac
 
@@ -29,7 +29,6 @@ fi
 if [ -z "${INGESTOR_VERSION}" ]; then
    INGESTOR_VERSION=$(date -u +%y.%m.%d.%H%M%S)
 fi
-
 
 if [ -z "${INGESTOR_BUILDX_OPTION}" ]; then
    INGESTOR_BUILDX_OPTION="-t squirreldb-ingestor:latest --load"

@@ -15,11 +15,13 @@ import (
 //
 //nolint:gochecknoglobals
 var (
-	version string = "0.1"
-	commit  string = "unset"
+	version = "0.1"
+	commit  = "unset"
 )
 
 // Options can be configured with environment variables and command line arguments.
+//
+//nolint:lll
 type Options struct {
 	RemoteWriteURL  string `arg:"--remote-write-url,env:INGESTOR_REMOTE_WRITE_URL" default:"http://localhost:9201/api/v1/write"`
 	MQTTBrokerURL   string `arg:"--mqtt-broker-url,env:INGESTOR_MQTT_BROKER_URL" default:"tcp://localhost:1883"`

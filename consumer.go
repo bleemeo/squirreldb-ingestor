@@ -41,7 +41,7 @@ type Consumer struct {
 	writer *Writer
 	// It's bad practise to store a context in a struct,
 	// but we need to use it in paho callbacks.
-	ctx context.Context
+	ctx context.Context //nolint:containedctx
 }
 
 type metricPayload struct {
@@ -98,7 +98,7 @@ func loadRootCAs(caFile string) (*x509.CertPool, error) {
 
 	certs, err := os.ReadFile(caFile)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read file: %w", err)
 	}
 
 	ok := rootCAs.AppendCertsFromPEM(certs)
@@ -145,7 +145,11 @@ func (c *Consumer) connectOnce(ctx context.Context) error {
 		isTimeout = !token.WaitTimeout(timeout)
 	}
 
-	return token.Error()
+	if token.Error() != nil {
+		return fmt.Errorf("connect: %w", token.Error())
+	}
+
+	return nil
 }
 
 func (c *Consumer) onConnect(_ paho.Client) {
@@ -262,7 +266,7 @@ func decode(input []byte, obj interface{}) error {
 		return fmt.Errorf("decode JSON: %w", err)
 	}
 
-	// G110: Potential DoS vulnerability via decompression bomb.
+	//nolint:gosec // G110: Potential DoS vulnerability via decompression bomb.
 	// False positive: copying to discard can't lead to memory exhaustion.
 	_, err = io.Copy(io.Discard, decoder)
 	if err != nil {
