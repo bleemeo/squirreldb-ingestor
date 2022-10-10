@@ -18,8 +18,12 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// Delay between connection and subscription attempts.
-const retryDelay = 10 * time.Second
+const (
+	// Delay between connection and subscription attempts to MQTT.
+	mqttRetryDelay = 10 * time.Second
+	// Delay between write attempts to the remote storage.
+	storageRetryDelay = 10 * time.Second
+)
 
 var errParseFQDN = errors.New("could not parse FQDN")
 
@@ -29,6 +33,9 @@ var dataTopicRegex = regexp.MustCompile("^v1/agent/(.*)/data$")
 type Consumer struct {
 	client paho.Client
 	writer *Writer
+	// It's bad practise to store a context in a struct,
+	// but we need to use it in paho callbacks.
+	ctx context.Context
 }
 
 type metricPayload struct {
@@ -66,6 +73,8 @@ func NewConsumer(opts Options) *Consumer {
 
 // Run starts receiving metrics from MQTT and writing them to the remote storage.
 func (c *Consumer) Run(ctx context.Context) {
+	c.ctx = ctx
+
 	c.connect(ctx)
 
 	<-ctx.Done()
@@ -75,10 +84,10 @@ func (c *Consumer) connect(ctx context.Context) {
 	err := c.connectOnce(ctx)
 
 	for err != nil && ctx.Err() == nil {
-		log.Warn().Err(err).Msgf("Failed to connect to MQTT, retry in %s", retryDelay)
+		log.Warn().Err(err).Msgf("Failed to connect to MQTT, retry in %s", mqttRetryDelay)
 
 		select {
-		case <-time.After(retryDelay):
+		case <-time.After(mqttRetryDelay):
 		case <-ctx.Done():
 			return
 		}
@@ -107,10 +116,10 @@ func (c *Consumer) onConnect(_ paho.Client) {
 	token := c.client.Subscribe("v1/agent/+/data", 1, c.onMessage)
 	token.Wait()
 
-	for token.Error() != nil {
-		log.Err(token.Error()).Msgf("Failed to subscribe, retry in %s", retryDelay)
+	for token.Error() != nil && c.ctx.Err() == nil {
+		log.Err(token.Error()).Msgf("Failed to subscribe, retry in %s", mqttRetryDelay)
 
-		time.Sleep(retryDelay)
+		time.Sleep(mqttRetryDelay)
 
 		token = c.client.Subscribe("v1/agent/+/data", 1, c.onMessage)
 		token.Wait()
@@ -160,9 +169,16 @@ func (c *Consumer) onMessage(_ paho.Client, m paho.Message) {
 	}
 
 	// Write the samples to the remote storage.
-	err = c.writer.Write(context.Background(), samples)
-	if err != nil {
-		log.Warn().Err(err).Msg("Failed to write points to the remote storage")
+	err = c.writer.Write(c.ctx, samples)
+	for err != nil && c.ctx.Err() == nil {
+		log.Warn().Err(err).Msgf("Failed to write points to the remote storage, retry in %s", storageRetryDelay)
+
+		select {
+		case <-time.After(storageRetryDelay):
+		case <-c.ctx.Done():
+		}
+
+		err = c.writer.Write(context.Background(), samples)
 	}
 }
 
