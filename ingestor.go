@@ -58,13 +58,16 @@ func NewIngestor(opts Options) *Ingestor {
 	}
 
 	pahoOpts := paho.NewClientOptions()
-	pahoOpts.AddBroker(opts.MQTTBrokerURL)
 	pahoOpts.SetCleanSession(false)
 	pahoOpts.SetClientID(opts.MQTTUsername)
 	pahoOpts.SetUsername(opts.MQTTUsername)
 	pahoOpts.SetPassword(opts.MQTTPassword)
 	pahoOpts.SetOnConnectHandler(c.onConnect)
 	pahoOpts.SetConnectionLostHandler(onConnectionLost)
+
+	for _, broker := range opts.MQTTBrokerURL {
+		pahoOpts.AddBroker(broker)
+	}
 
 	if opts.MQTTSSLInsecure || opts.MQTTCAFile != "" {
 		tlsConfig := &tls.Config{

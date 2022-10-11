@@ -4,7 +4,7 @@ services:
     image: bleemeo/squirreldb-ingestor
     environment:
       - INGESTOR_REMOTE_WRITE_URL=http://squirreldb:9201/api/v1/write
-      - INGESTOR_MQTT_BROKER_URL=tcp://nats-1:1883
+      - INGESTOR_MQTT_BROKER_URL=nats-1:1883,nats-2:1883,nats-3:1883
       - INGESTOR_MQTT_USERNAME=ingestor
       - INGESTOR_MQTT_PASSWORD=passw0rd
 
