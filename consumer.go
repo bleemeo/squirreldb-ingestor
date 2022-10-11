@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"strings"
 	"time"
 
 	paho "github.com/eclipse/paho.mqtt.golang"
@@ -180,7 +181,7 @@ func (c *Ingestor) onMessage(_ paho.Client, m paho.Message) {
 		return
 	}
 
-	log.Debug().Str("topic", m.Topic()).Msgf("Received %d points", len(metrics))
+	log.Debug().Str("instance", fqdn).Msgf("Received %d points", len(metrics))
 
 	// Convert the metrics to samples.
 	samples := make([]sample, 0, len(metrics))
@@ -223,7 +224,11 @@ func fqdnFromTopic(topic string) (string, error) {
 	matches := dataTopicRegex.FindStringSubmatch(topic)
 
 	if len(matches) == 2 {
-		return matches[1], nil
+		// Glouton replaces '.' with ',' in the FQQN so it can be used
+		// in a NATS topic, convert it back to a '.'.
+		topic := strings.ReplaceAll(matches[1], ",", ".")
+
+		return topic, nil
 	}
 
 	return "", fmt.Errorf("topic %s: %w", topic, errParseFQDN)
