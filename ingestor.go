@@ -224,7 +224,7 @@ func fqdnFromTopic(topic string) (string, error) {
 	matches := dataTopicRegex.FindStringSubmatch(topic)
 
 	if len(matches) == 2 {
-		// Glouton replaces '.' with ',' in the FQQN so it can be used
+		// Glouton replaces '.' with ',' in the FQDN so it can be used
 		// in a NATS topic, convert it back to a '.'.
 		topic := strings.ReplaceAll(matches[1], ",", ".")
 

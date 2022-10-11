@@ -1,0 +1,65 @@
+version: '3'
+services:
+  squirreldb-ingestor:
+    image: bleemeo/squirreldb-ingestor
+    environment:
+      - INGESTOR_REMOTE_WRITE_URL=http://squirreldb:9201/api/v1/write
+      - INGESTOR_MQTT_BROKER_URL=tcp://nats-1:1883
+      - INGESTOR_MQTT_USERNAME=ingestor
+      - INGESTOR_MQTT_PASSWORD=passw0rd
+
+  squirreldb:
+    image: bleemeo/squirreldb
+    restart: unless-stopped
+    environment:
+    - SQUIRRELDB_CASSANDRA_ADDRESSES=cassandra:9042
+    - SQUIRRELDB_REDIS_ADDRESSES=redis:6379
+
+  redis:
+    image: redis
+
+  cassandra:
+    image: cassandra
+    cap_add:
+    - SYS_NICE # Cassandra use mbind on NUMA system
+    environment:
+    # Limit memory usage.
+    - MAX_HEAP_SIZE=128M
+    - HEAP_NEWSIZE=24M
+    volumes:
+    - cassandra-data:/var/lib/cassandra
+
+  grafana:
+    image: grafana/grafana
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./dashboards:/etc/grafana/provisioning/dashboards
+      - ./datasource.yml:/etc/grafana/provisioning/datasources/datasource.yml
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=password
+    ports:
+      - 127.0.0.1:3000:3000
+
+  nats-1:
+    image: nats:2.9
+    command: -n nats-1 -c /etc/nats/nats-server.conf
+    volumes:
+      - ./nats.conf:/etc/nats/nats-server.conf:ro
+    ports:
+    - 1883:1883
+
+  nats-2:
+    image: nats:2.9
+    command: -n nats-2 -c /etc/nats/nats-server.conf
+    volumes:
+      - ./nats.conf:/etc/nats/nats-server.conf:ro
+
+  nats-3:
+    image: nats:2.9
+    command: -n nats-3 -c /etc/nats/nats-server.conf
+    volumes:
+      - ./nats.conf:/etc/nats/nats-server.conf:ro
+
+volumes:
+  grafana-data: {}
+  cassandra-data: {}

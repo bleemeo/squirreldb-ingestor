@@ -7,6 +7,8 @@ compatible with Prometheus remote write).
 An example Docker Compose with Glouton, SquirrelDB and Grafana is available
 [here](https://github.com/bleemeo/glouton/tree/master/examples/mqtt).
 
+To use authenticated MQTT connections and a high availability setup, check out the [setup example](#setup-example).
+
 ## Run
 
 SquirrelDB Ingestor can be run with Docker or as a binary.
@@ -50,6 +52,114 @@ Allow insecure SSL connection.
 
 -  `--mqtt-ca-file`, env: `INGESTOR_MQTT_CA_FILE`  
 Provide your own SSL certificate, this should be the path to a PEM file.
+
+## Setup example
+
+In this example, we are going to setup a Grafana dashboard from metrics sent by two Gloutons over MQTT.
+
+### MQTT autentication and autorizations
+
+Let's say we want to monitor two servers, `server1.example.com` and `server2.example.com`. First, let's
+create MQTT users. This setup uses NATS as the MQTT broker. Edit the NATS configuration file in 
+`examples/ingestor_ha/nats.conf` and modify the `authorization` block to add a user for each server
+and allow it to only publish to a single topic. The autorizations should look like this:
+
+```conf
+authorization {
+    # Allow the ingestor to listen on the MQTT topic "v1/agent/+/data".
+    # https://docs.nats.io/running-a-nats-service/configuration/mqtt#mqtt-topics-and-nats-subjects
+    # We also allow need to allow "$MQTT.sub.>" because NATS uses this topic to store durable subsription.
+    # https://docs.nats.io/running-a-nats-service/configuration/mqtt/mqtt_config#special-permissions
+    ingestor_perms = {
+        subscribe = ["v1.agent.*.data", "$MQTT.sub.>"]
+    }
+
+    # Glouton publishes its metrics to the `v1/agent/fqdn/data` topic, with `fqdn` replaced by the host FQDN.
+    # `.` are replaced by `,` in the FQDN because NATS doesn't support `.` in MQTT topics.
+    # On Linux, you can get your FQDN with "hostname -f".
+    server1_perms = {
+        publish = ["v1.agent.server1,example,com.data"]
+    }
+
+    server2_perms = {
+        publish = ["v1.agent.server2,example,com.data"]
+    }
+
+    users = [
+        {user: ingestor, password: passw0rd, permissions: $ingestor_perms, allowed_connection_types: ["MQTT"]}
+        {user: server1, password: passw0rd, permissions: $server1_perms, allowed_connection_types: ["MQTT"]}
+        {user: server2, password: passw0rd, permissions: $server1_perms, allowed_connection_types: ["MQTT"]}
+    ]
+}
+```
+
+### Run NATS, SquirrelDB Ingestor, SquirrelDB and Grafana
+
+A docker compose is available to start a monitoring stack with SquirrelDB Ingestor, NATS, SquirrelDB and
+Grafana. It provides a NATS cluster with 3 nodes for high availability.
+
+```sh
+cd examples/ingestor_ha
+docker-compose up -d
+```
+
+Now you can check that the ingestor is connected to MQTT. The logs should say `MQTT connection established`.
+```sh
+docker-compose logs -f squirreldb-ingestor 
+```
+
+### Connect your agents
+
+Now let's connect our first agent. First, on `server1`, create the Glouton configuration file `glouton.conf`
+with the content below, replacing the MQTT host by the IP of the server running the docker compose.
+
+```yaml
+agent:
+  metrics_format: prometheus
+
+bleemeo:
+  enable: false
+
+mqtt:
+  enable: true
+  host: 127.0.0.1
+  port: 1883
+  username: server1
+  password: passw0rd
+
+# Allow node exporter metrics.
+metric:
+  allow_metrics:
+    - node_*
+```
+
+We can run Glouton with Docker using this configuration:
+```sh
+docker run -d --name="bleemeo-agent" \
+    -v /var/lib/glouton:/var/lib/glouton -v /var/run/docker.sock:/var/run/docker.sock -v /:/hostroot:ro \
+    -v $(pwd)/glouton.conf:/etc/glouton/conf.d/90-mqtt.conf \
+    -e  GLOUTON_BLEEMEO_ENABLE='false' --pid=host --net=host \
+    --cap-add SYS_PTRACE --cap-add SYS_ADMIN bleemeo/bleemeo-agent
+```
+
+Check the logs to verify that Glouton is connected to MQTT, you should see `Open Source MQTT connection established`:
+```sh
+docker logs -f bleemeo-agent
+```
+
+You can connect your second server the same way, just change the MQTT username and password for
+the ones you set in the NATS configuration file.
+
+Then go to the Grafana dashboard at http://localhost:3000/d/83ceCuenk/, and log in with the user
+"admin" and the password "password". You can monitor all your servers from this dashboard.
+
+### Scaling
+
+This setup allows scaling for high availability. First you can put the NATS cluster behind a load
+balancer and make Glouton and SquirrelDB Ingestor use it to have high availability for MQTT.
+
+SquirrelDB can also be scaled, an example is available 
+[here](https://github.com/bleemeo/squirreldb/tree/master/examples/squirreldb_ha).
 
 ## Contributing
 
