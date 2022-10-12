@@ -78,6 +78,16 @@ docker-compose logs -f glouton-1 glouton-2
 Then go to the Grafana dashboard at http://localhost:3000/d/83ceCuenk/, and log in with the user
 "admin" and the password "password". You can monitor all your servers from this dashboard.
 
+### High availabity
+
+This setup provides a NATS cluster to have high availability for MQTT.
+
+SquirrelDB, Cassandra and Redis are running with a single node in the example, 
+but they can also be scaled, an example is available
+[here](https://github.com/bleemeo/squirreldb/tree/master/examples/squirreldb_ha).
+
+For true high availability, each component must run on a different node, which is is not done by the docker compose.
+
 ## MQTT autentication and autorizations with NATS
 
 An example NATS cluster configuration is available in `examples/ingestor_ha/nats.conf`. 
@@ -152,14 +162,6 @@ docker run -d --name="bleemeo-agent" \
     -e  GLOUTON_BLEEMEO_ENABLE='false' --pid=host --net=host \
     --cap-add SYS_PTRACE --cap-add SYS_ADMIN bleemeo/bleemeo-agent
 ```
-
-### Scaling
-
-This setup allows scaling for high availability. First you can put the NATS cluster behind a load
-balancer and make Glouton and SquirrelDB Ingestor use it to have high availability for MQTT.
-
-SquirrelDB can also be scaled, an example is available 
-[here](https://github.com/bleemeo/squirreldb/tree/master/examples/squirreldb_ha).
 
 ## Contributing
 
