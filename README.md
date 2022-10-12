@@ -57,12 +57,35 @@ Provide your own SSL certificate, this should be the path to a PEM file.
 
 In this example, we are going to setup a Grafana dashboard from metrics sent by two Gloutons over MQTT.
 
-### MQTT autentication and autorizations
+A docker compose is available to start a monitoring stack with two Gloutons, SquirrelDB Ingestor, NATS, 
+SquirrelDB and Grafana. It provides a NATS cluster with 3 nodes for high availability.
 
-Let's say we want to monitor two servers, `server1.example.com` and `server2.example.com`. First, let's
-create MQTT users. This setup uses NATS as the MQTT broker. Edit the NATS configuration file in 
-`examples/ingestor_ha/nats.conf` and modify the `authorization` block to add a user for each server
-and allow it to only publish to a single topic. The autorizations should look like this:
+```sh
+cd examples/ingestor_ha
+docker-compose up -d
+```
+
+Now you can check that the ingestor is connected to MQTT. The logs should say `MQTT connection established`.
+```sh
+docker-compose logs -f squirreldb-ingestor 
+```
+
+Also check that the agents connected to MQTT, you should see `Open Source MQTT connection established`:
+```sh
+docker-compose logs -f glouton-1 glouton-2
+```
+
+Then go to the Grafana dashboard at http://localhost:3000/d/83ceCuenk/, and log in with the user
+"admin" and the password "password". You can monitor all your servers from this dashboard.
+
+## MQTT autentication and autorizations with NATS
+
+An example NATS cluster configuration is available in `examples/ingestor_ha/nats.conf`. 
+For each new user, you need to add it the `authorization` block of the configuration with the right
+permissions to allow it to only publish to a single topic. 
+
+Let's say we want to monitor two servers, `server1.example.com` and `server2.example.com`. 
+The autorizations should look like this:
 
 ```conf
 authorization {
@@ -93,25 +116,10 @@ authorization {
 }
 ```
 
-### Run NATS, SquirrelDB Ingestor, SquirrelDB and Grafana
+## Connecting your agents
 
-A docker compose is available to start a monitoring stack with SquirrelDB Ingestor, NATS, SquirrelDB and
-Grafana. It provides a NATS cluster with 3 nodes for high availability.
-
-```sh
-cd examples/ingestor_ha
-docker-compose up -d
-```
-
-Now you can check that the ingestor is connected to MQTT. The logs should say `MQTT connection established`.
-```sh
-docker-compose logs -f squirreldb-ingestor 
-```
-
-### Connect your agents
-
-Now let's connect our first agent. First, on `server1`, create the Glouton configuration file `glouton.conf`
-with the content below, replacing the MQTT host by the IP of the server running the docker compose.
+To connect your agent to the SquirrelDB Ingestor, you need to edit its configuration. Here is an example
+configuration, you should change the hosts to the nodes running NATS, and edit the username and password.
 
 ```yaml
 agent:
@@ -122,7 +130,8 @@ bleemeo:
 
 mqtt:
   enable: true
-  host: 127.0.0.1
+  hosts: 
+    - 127.0.0.1
   port: 1883
   username: server1
   password: passw0rd
@@ -133,7 +142,9 @@ metric:
     - node_*
 ```
 
-We can run Glouton with Docker using this configuration:
+To start a new agent with this configuration you can use Docker. The following command supposes
+that you wrote the configuration to a file in the current directory called `glouton.conf`.
+
 ```sh
 docker run -d --name="bleemeo-agent" \
     -v /var/lib/glouton:/var/lib/glouton -v /var/run/docker.sock:/var/run/docker.sock -v /:/hostroot:ro \
@@ -141,17 +152,6 @@ docker run -d --name="bleemeo-agent" \
     -e  GLOUTON_BLEEMEO_ENABLE='false' --pid=host --net=host \
     --cap-add SYS_PTRACE --cap-add SYS_ADMIN bleemeo/bleemeo-agent
 ```
-
-Check the logs to verify that Glouton is connected to MQTT, you should see `Open Source MQTT connection established`:
-```sh
-docker logs -f bleemeo-agent
-```
-
-You can connect your second server the same way, just change the MQTT username and password for
-the ones you set in the NATS configuration file.
-
-Then go to the Grafana dashboard at http://localhost:3000/d/83ceCuenk/, and log in with the user
-"admin" and the password "password". You can monitor all your servers from this dashboard.
 
 ### Scaling
 

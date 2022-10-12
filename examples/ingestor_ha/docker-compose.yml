@@ -1,5 +1,34 @@
 version: '3'
 services:
+  # Note that the Gloutons in this docker compose are not intended for
+  # production, they are not running with the host network so they will 
+  # not be able to discover the services running on your server.
+  glouton-1:
+    image: bleemeo/bleemeo-agent
+    hostname: server1.example.com
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /:/hostroot:ro
+      - ./glouton-1.conf:/etc/glouton/conf.d/90-mqtt.conf:ro
+      - glouton-data-1:/var/lib/glouton
+    pid: "host"
+    cap_add:
+      - SYS_PTRACE # This permission is needed to monitor processes IO and memory used per process.
+      - SYS_ADMIN # This permission is needed to retrieve the network interface names of containers.
+
+  glouton-2:
+    image: bleemeo/bleemeo-agent
+    hostname: server2.example.com
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /:/hostroot:ro
+      - ./glouton-2.conf:/etc/glouton/conf.d/90-mqtt.conf:ro
+      - glouton-data-2:/var/lib/glouton
+    pid: "host"
+    cap_add:
+      - SYS_PTRACE # This permission is needed to monitor processes IO and memory used per process.
+      - SYS_ADMIN # This permission is needed to retrieve the network interface names of containers.
+
   squirreldb-ingestor:
     image: bleemeo/squirreldb-ingestor
     environment:
@@ -63,3 +92,5 @@ services:
 volumes:
   grafana-data: {}
   cassandra-data: {}
+  glouton-data-1: {}
+  glouton-data-2: {}
