@@ -26,12 +26,12 @@ if docker volume ls | grep -q squirreldb-ingestor-buildcache; then
    GO_MOUNT_CACHE="-v squirreldb-ingestor-buildcache:/go/pkg"
 fi
 
-if [ -z "${INGESTOR_VERSION}" ]; then
-   INGESTOR_VERSION=$(date -u +%y.%m.%d.%H%M%S)
+if [ -z "${SQUIRRELDB_INGESTOR_VERSION}" ]; then
+   SQUIRRELDB_INGESTOR_VERSION=$(date -u +%y.%m.%d.%H%M%S)
 fi
 
-if [ -z "${INGESTOR_BUILDX_OPTION}" ]; then
-   INGESTOR_BUILDX_OPTION="-t squirreldb-ingestor:latest --load"
+if [ -z "${SQUIRRELDB_INGESTOR_BUILDX_OPTION}" ]; then
+   SQUIRRELDB_INGESTOR_BUILDX_OPTION="-t squirreldb-ingestor:latest --load"
 fi
 
 COMMIT=`git rev-parse --short HEAD || echo "unknown"`
@@ -42,7 +42,7 @@ if [ "${ONLY_GO}" = "1" -a "${WITH_RACE}" != "1" ]; then
       --entrypoint '' \
       goreleaser/goreleaser:${GORELEASER_VERSION} \
       sh -exc "
-      go build -ldflags='-X main.version=${INGESTOR_VERSION} -X main.commit=${COMMIT}' .
+      go build -ldflags='-X main.version=${SQUIRRELDB_INGESTOR_VERSION} -X main.commit=${COMMIT}' .
       chown $USER_UID squirreldb-ingestor
       "
 elif [ "${ONLY_GO}" = "1" -a "${WITH_RACE}" = "1"  ]; then
@@ -51,7 +51,7 @@ elif [ "${ONLY_GO}" = "1" -a "${WITH_RACE}" = "1"  ]; then
       --entrypoint '' \
       goreleaser/goreleaser:${GORELEASER_VERSION} \
       sh -exc "
-      go build -ldflags='-X main.version=${INGESTOR_VERSION} -X main.commit=${COMMIT} -linkmode external -extldflags=-static' -race .
+      go build -ldflags='-X main.version=${SQUIRRELDB_INGESTOR_VERSION} -X main.commit=${COMMIT} -linkmode external -extldflags=-static' -race .
       chown $USER_UID squirreldb-ingestor
       "
 else
@@ -71,11 +71,11 @@ else
       chown -R $USER_UID dist
       "
 
-   echo $INGESTOR_VERSION > dist/VERSION
+   echo $SQUIRRELDB_INGESTOR_VERSION > dist/VERSION
 
    # Build Docker image using buildx. We use docker buildx instead of goreleaser because
    # goreleaser use "docker manifest" which require to push image to a registry. This means we ends with 4 tags:
    # 3 for each of the 3 supported architectures and 1 for the multi-architecture image.
    # Using buildx only generate 1 tag on the Docker Hub.
-   docker buildx build ${INGESTOR_BUILDX_OPTION} .
+   docker buildx build ${SQUIRRELDB_INGESTOR_BUILDX_OPTION} .
 fi
