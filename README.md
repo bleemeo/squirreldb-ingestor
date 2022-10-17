@@ -14,6 +14,8 @@ An example Docker Compose with Glouton, SquirrelDB and Grafana is available
 
 To use authenticated MQTT connections and a high availability setup, check out the [setup example](#setup-example).
 
+![](squirreldb-ingestor.drawio.png)
+
 ## Run
 
 SquirrelDB Ingestor can be run with Docker or as a binary.
