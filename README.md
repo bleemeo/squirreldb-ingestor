@@ -1,5 +1,10 @@
 # SquirrelDB Ingestor
 
+[![Go Report Card](https://goreportcard.com/badge/github.com/bleemeo/squirreldb-ingestor)](https://goreportcard.com/report/github.com/bleemeo/squirreldb-ingestor)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/bleemeo/squirreldb-ingestor/blob/master/LICENSE)
+[![Docker Image Version](https://img.shields.io/docker/v/bleemeo/squirreldb-ingestor)](https://hub.docker.com/r/bleemeo/squirreldb-ingestor/tags)
+[![Docker Image Size](https://img.shields.io/docker/image-size/bleemeo/squirreldb-ingestor)](https://hub.docker.com/r/bleemeo/squirreldb-ingestor)
+
 SquirrelDB Ingestor reads metrics sent by [Glouton](https://github.com/bleemeo/glouton) over MQTT 
 and store  them in [SquirrelDB](https://github.com/bleemeo/squirreldb) (or any other component
 compatible with Prometheus remote write).
