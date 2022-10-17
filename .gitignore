@@ -1,2 +1,6 @@
-.vscode
+/.vscode
+/squirreldb-ingestor
+/dist
+/coverage.out
+/coverage.html
 __debug_bin
