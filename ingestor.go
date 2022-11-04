@@ -34,12 +34,13 @@ var (
 	errNotPem    = errors.New("not a PEM file")
 )
 
-var dataTopicRegex = regexp.MustCompile("^v1/agent/(.*)/data$")
+var dataTopicRegex = regexp.MustCompile("^v1/agent/(.*)/data")
 
 // Ingestor reads metrics from MQTT and write them to a remote storage.
 type Ingestor struct {
 	client paho.Client
 	writer *Writer
+	opts   Options
 	// It's bad practise to store a context in a struct,
 	// but we need to use it in paho callbacks.
 	ctx context.Context //nolint:containedctx
@@ -54,6 +55,7 @@ type metricPayload struct {
 // NewIngestor returns a new initialized ingestor.
 func NewIngestor(opts Options) *Ingestor {
 	c := &Ingestor{
+		opts:   opts,
 		writer: NewWriter(opts.RemoteWriteURL),
 	}
 
@@ -153,7 +155,12 @@ func (c *Ingestor) connectOnce(ctx context.Context) error {
 func (c *Ingestor) onConnect(_ paho.Client) {
 	log.Info().Msg("MQTT connection established")
 
-	token := c.client.Subscribe("v1/agent/+/data", 1, c.onMessage)
+	topic := "v1/agent/+/data"
+	if c.opts.MQTTID != "" {
+		topic = fmt.Sprintf("%s/%s", topic, c.opts.MQTTID)
+	}
+
+	token := c.client.Subscribe(topic, 1, c.onMessage)
 	token.Wait()
 
 	// If there is an error, the client should reconnect so the subscription will be retried.

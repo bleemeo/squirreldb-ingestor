@@ -29,13 +29,23 @@ services:
       - SYS_PTRACE # This permission is needed to monitor processes IO and memory used per process.
       - SYS_ADMIN # This permission is needed to retrieve the network interface names of containers.
 
-  squirreldb-ingestor:
+  squirreldb-ingestor-1:
     image: bleemeo/squirreldb-ingestor
     environment:
       - INGESTOR_REMOTE_WRITE_URL=http://squirreldb:9201/api/v1/write
       - INGESTOR_MQTT_BROKER_URL=nats-1:1883,nats-2:1883,nats-3:1883
-      - INGESTOR_MQTT_USERNAME=ingestor
+      - INGESTOR_MQTT_USERNAME=ingestor1
       - INGESTOR_MQTT_PASSWORD=passw0rd
+      - INGESTOR_MQTT_ID=1
+
+  squirreldb-ingestor-2:
+    image: bleemeo/squirreldb-ingestor
+    environment:
+      - INGESTOR_REMOTE_WRITE_URL=http://squirreldb:9201/api/v1/write
+      - INGESTOR_MQTT_BROKER_URL=nats-1:1883,nats-2:1883,nats-3:1883
+      - INGESTOR_MQTT_USERNAME=ingestor2
+      - INGESTOR_MQTT_PASSWORD=passw0rd
+      - INGESTOR_MQTT_ID=2
 
   squirreldb:
     image: bleemeo/squirreldb
@@ -70,21 +80,19 @@ services:
       - 127.0.0.1:3000:3000
 
   nats-1:
-    image: nats:2.9
+    image: nats:2.9.5
     command: -n nats-1 -c /etc/nats/nats-server.conf
     volumes:
       - ./nats.conf:/etc/nats/nats-server.conf:ro
-    ports:
-    - 1883:1883
 
   nats-2:
-    image: nats:2.9
+    image: nats:2.9.5
     command: -n nats-2 -c /etc/nats/nats-server.conf
     volumes:
       - ./nats.conf:/etc/nats/nats-server.conf:ro
 
   nats-3:
-    image: nats:2.9
+    image: nats:2.9.5
     command: -n nats-3 -c /etc/nats/nats-server.conf
     volumes:
       - ./nats.conf:/etc/nats/nats-server.conf:ro

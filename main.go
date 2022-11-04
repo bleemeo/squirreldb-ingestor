@@ -29,6 +29,7 @@ type Options struct {
 	MQTTPassword    string   `arg:"--mqtt-password,env:INGESTOR_MQTT_PASSWORD"`
 	MQTTSSLInsecure bool     `arg:"--mqtt-ssl-insecure,env:INGESTOR_MQTT_SSL_INSECURE"`
 	MQTTCAFile      string   `arg:"--mqtt-ca-file,env:INGESTOR_MQTT_CA_FILE"`
+	MQTTID          string   `arg:"--mqtt-id,env:INGESTOR_MQTT_ID"`
 	LogLevel        string   `arg:"--log-level,env:INGESTOR_LOG_LEVEL" default:"info"`
 }
 
