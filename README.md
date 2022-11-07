@@ -197,8 +197,10 @@ Then you need to pass the argument `--mqtt-id 1` to the first ingestor and
 `--mqtt-id 2` to the second.
 
 Note that running multiple ingestors doesn't give you high availability, if one ingestor
-is down, the messages won't be processed until it's restarted (but you won't lose any metric).
-
+is down, the messages won't be processed until it's restarted. This is not much of an issue
+since the messages are buffered in NATS so you won't lose any metric. Moreover, the ingestor is
+stateless, so it can be restarted with the same configuration, which might be automated by an 
+orchestrator like Kubernetes.
 
 ## Contributing
 
