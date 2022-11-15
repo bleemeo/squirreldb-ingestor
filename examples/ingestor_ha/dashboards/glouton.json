@@ -135,7 +135,7 @@
             "type": "prometheus",
             "uid": "Prometheus"
           },
-          "exemplar": true,
+          "exemplar": false,
           "expr": "(((count(count(node_cpu_seconds_total{instance=\"$node\"}) by (cpu))) - avg(sum by (mode)(rate(node_cpu_seconds_total{mode='idle',instance=\"$node\"}[$__rate_interval])))) * 100) / count(count(node_cpu_seconds_total{instance=\"$node\"}) by (cpu))",
           "hide": false,
           "interval": "",
@@ -1930,7 +1930,7 @@
             "uid": "Prometheus"
           },
           "editorMode": "code",
-          "exemplar": true,
+          "exemplar": false,
           "expr": "container_cpu_used",
           "interval": "",
           "legendFormat": "{{item}}{{container_name}}",
@@ -2025,7 +2025,7 @@
             "uid": "Prometheus"
           },
           "editorMode": "code",
-          "exemplar": true,
+          "exemplar": false,
           "expr": "container_mem_used",
           "interval": "",
           "legendFormat": "{{item}}{{container_name}}",
@@ -2078,7 +2078,7 @@
     ]
   },
   "time": {
-    "from": "now-1m",
+    "from": "now-5m",
     "to": "now"
   },
   "timepicker": {
