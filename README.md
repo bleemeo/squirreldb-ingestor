@@ -6,7 +6,7 @@
 [![Docker Image Size](https://img.shields.io/docker/image-size/bleemeo/squirreldb-ingestor)](https://hub.docker.com/r/bleemeo/squirreldb-ingestor)
 
 SquirrelDB Ingestor reads metrics sent by [Glouton](https://github.com/bleemeo/glouton) over MQTT 
-and store  them in [SquirrelDB](https://github.com/bleemeo/squirreldb) (or any other component
+and stores them in [SquirrelDB](https://github.com/bleemeo/squirreldb) (or any other component
 compatible with Prometheus remote write).
 
 An example Docker Compose with Glouton, SquirrelDB and Grafana is available
