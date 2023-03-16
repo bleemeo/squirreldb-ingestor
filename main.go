@@ -52,7 +52,7 @@ func main() {
 	// Setup logger.
 	writer := zerolog.ConsoleWriter{
 		Out:        os.Stdout,
-		TimeFormat: "15:04:05",
+		TimeFormat: "2006-01-02 15:04:05.000",
 	}
 
 	logLevel, err := zerolog.ParseLevel(opts.LogLevel)
@@ -61,6 +61,9 @@ func main() {
 	}
 
 	log.Logger = log.Output(writer).With().Timestamp().Logger().Level(logLevel)
+
+	// Change the default time format of zerolog to allow millisecond precision.
+	zerolog.TimeFieldFormat = zerolog.TimeFormatUnixMs
 
 	// Run the ingestor.
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
