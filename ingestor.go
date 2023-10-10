@@ -205,7 +205,7 @@ func (c *Ingestor) onMessage(_ paho.Client, m paho.Message) {
 		builder.Set("instance", fqdn)
 
 		samples = append(samples, sample{
-			labels:    builder.Labels(nil),
+			labels:    builder.Labels(),
 			value:     metric.Value,
 			timestamp: metric.TimestampMS,
 		})
