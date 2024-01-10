@@ -1,4 +1,5 @@
 /.vscode
+/.idea
 /squirreldb-ingestor
 /dist
 /coverage.out
