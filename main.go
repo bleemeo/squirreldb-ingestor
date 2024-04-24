@@ -6,7 +6,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	arg "github.com/alexflint/go-arg"
+	"github.com/alexflint/go-arg"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
