@@ -36,7 +36,7 @@ var (
 
 var dataTopicRegex = regexp.MustCompile("^v1/agent/(.*)/data")
 
-// Ingestor reads metrics from MQTT and write them to a remote storage.
+// Ingestor reads metrics from MQTT and writes them to a remote storage.
 type Ingestor struct {
 	client paho.Client
 	writer *Writer
@@ -274,7 +274,7 @@ func decode(input []byte, obj interface{}) error {
 		return fmt.Errorf("decode JSON: %w", err)
 	}
 
-	//nolint:gosec // G110: Potential DoS vulnerability via decompression bomb.
+	//nolint:gosec // G110: Potential DoS vulnerability via a decompression bomb.
 	// False positive: copying to discard can't lead to memory exhaustion.
 	_, err = io.Copy(io.Discard, decoder)
 	if err != nil {
