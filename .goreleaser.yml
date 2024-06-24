@@ -1,3 +1,4 @@
+version: 2
 project_name: squirreldb-ingestor
 snapshot:
   # Our version is based on the date.

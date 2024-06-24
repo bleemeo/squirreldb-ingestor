@@ -2,8 +2,7 @@
 
 set -e
 
-
-GORELEASER_VERSION="v1.25.1"
+GORELEASER_VERSION="v2.0.1"
 USER_UID=$(id -u)
 
 case "$1" in
@@ -68,7 +67,7 @@ else
       git config --global --add safe.directory /src
       goreleaser check
       go test ./...
-      goreleaser --rm-dist --snapshot --parallelism 2
+      goreleaser --clean --snapshot --parallelism 2
       chown -R $USER_UID dist
       "
 
