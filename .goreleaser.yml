@@ -2,7 +2,7 @@ version: 2
 project_name: squirreldb-ingestor
 snapshot:
   # Our version is based on the date.
-  name_template: '{{ time "06.01.02.150405" }}'
+  version_template: '{{ time "06.01.02.150405" }}'
 before:
   hooks:
     - go mod download

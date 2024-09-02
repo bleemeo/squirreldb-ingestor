@@ -72,7 +72,7 @@ func (w *Writer) Write(ctx context.Context, samples []sample) error {
 		return err
 	}
 
-	if err := w.client.Store(ctx, req, 0); err != nil {
+	if _, err = w.client.Store(ctx, req, 0); err != nil {
 		return fmt.Errorf("remote write: %w", err)
 	}
 
