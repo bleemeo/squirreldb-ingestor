@@ -3,7 +3,7 @@ FROM --platform=$BUILDPLATFORM alpine:3.16 AS build
 ARG TARGETARCH
 
 COPY dist/squirreldb-ingestor_linux_amd64_v1/squirreldb-ingestor /squirreldb-ingestor.amd64
-COPY dist/squirreldb-ingestor_linux_arm64/squirreldb-ingestor /squirreldb-ingestor.arm64
+COPY dist/squirreldb-ingestor_linux_arm64_v8.0/squirreldb-ingestor /squirreldb-ingestor.arm64
 COPY dist/squirreldb-ingestor_linux_arm_6/squirreldb-ingestor /squirreldb-ingestor.arm
 
 RUN cp -p /squirreldb-ingestor.$TARGETARCH /squirreldb-ingestor

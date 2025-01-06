@@ -2,7 +2,7 @@
 
 set -e
 
-GORELEASER_VERSION="v2.3.2"
+GORELEASER_VERSION="v2.5.1"
 USER_UID=$(id -u)
 
 case "$1" in
