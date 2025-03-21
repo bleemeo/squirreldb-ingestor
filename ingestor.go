@@ -263,7 +263,7 @@ func textToLabels(text string) labels.Labels {
 }
 
 // Decode a zlib compressed JSON payload.
-func decode(input []byte, obj interface{}) error {
+func decode(input []byte, obj any) error {
 	decoder, err := zlib.NewReader(bytes.NewReader(input))
 	if err != nil {
 		return fmt.Errorf("zlib reader: %w", err)
