@@ -2,7 +2,7 @@
 
 set -e
 
-LINTER_VERSION=v2.1.2
+LINTER_VERSION=v2.1.6
 
 USER_UID=$(id -u)
 
@@ -61,6 +61,9 @@ fi
 
 docker run --rm -v "$(pwd)":/app ${GO_MOUNT_CACHE} -e HOME=/go/pkg \
    -e GOOS=linux -e GOARCH=amd64 -w /app golangci/golangci-lint:${LINTER_VERSION} \
+   bash -ec "
+   git config --global --add safe.directory /app
    golangci-lint run
+   "
 
 echo "Success"
