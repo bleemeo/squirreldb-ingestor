@@ -250,16 +250,16 @@ func textToLabels(text string) labels.Labels {
 	if err != nil {
 		log.Warn().Err(err).Msgf("Failed to decode labels '%s'", text)
 
-		return nil
+		return labels.Labels{}
 	}
 
-	results := make(labels.Labels, 0, len(lbls))
+	l := make([]labels.Label, len(lbls))
 
-	for _, v := range lbls {
-		results = append(results, labels.Label{Name: v.Name, Value: v.Value})
+	for i, v := range lbls {
+		l[i] = labels.Label{Name: v.Name, Value: v.Value}
 	}
 
-	return results
+	return labels.New(l...)
 }
 
 // Decode a zlib compressed JSON payload.
