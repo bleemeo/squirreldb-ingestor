@@ -119,19 +119,19 @@ func samplesToTimeseries(samples []sample) []prompb.TimeSeries {
 
 // labelsToLabelsProto transforms labels into prompb labels. The buffer slice
 // will be used to avoid allocations if it is big enough to store the labels.
-func labelsToLabelsProto(labels labels.Labels, buf []prompb.Label) []prompb.Label {
+func labelsToLabelsProto(lbls labels.Labels, buf []prompb.Label) []prompb.Label {
 	result := buf[:0]
 
-	if cap(buf) < len(labels) {
-		result = make([]prompb.Label, 0, len(labels))
+	if count := lbls.Len(); cap(buf) < count {
+		result = make([]prompb.Label, 0, count)
 	}
 
-	for _, l := range labels {
+	lbls.Range(func(l labels.Label) {
 		result = append(result, prompb.Label{
 			Name:  l.Name,
 			Value: l.Value,
 		})
-	}
+	})
 
 	return result
 }
