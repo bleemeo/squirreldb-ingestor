@@ -246,7 +246,9 @@ func fqdnFromTopic(topic string) (string, error) {
 
 // textToLabels converts labels text to a list of label.
 func textToLabels(text string) labels.Labels {
-	lbls, err := parser.ParseMetricSelector("{" + text + "}")
+	p := parser.NewParser(parser.Options{})
+
+	lbls, err := p.ParseMetricSelector("{" + text + "}")
 	if err != nil {
 		log.Warn().Err(err).Msgf("Failed to decode labels '%s'", text)
 
