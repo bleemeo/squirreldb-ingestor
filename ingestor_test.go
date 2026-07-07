@@ -267,7 +267,7 @@ func TestRunWriterBatchesMessages(t *testing.T) {
 
 	m := newMetrics()
 
-	writer, err := NewWriter(server.URL, m)
+	writer, err := NewWriter(Options{RemoteWriteURL: server.URL}, m)
 	if err != nil {
 		t.Fatalf("NewWriter failed: %v", err)
 	}

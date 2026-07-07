@@ -23,16 +23,20 @@ var (
 //
 //nolint:lll
 type Options struct {
-	RemoteWriteURL  string   `arg:"--remote-write-url,env:INGESTOR_REMOTE_WRITE_URL"   default:"http://localhost:9201/api/v1/write"`
-	MQTTBrokerURL   []string `arg:"--mqtt-broker-url,env:INGESTOR_MQTT_BROKER_URL"`
-	MQTTUsername    string   `arg:"--mqtt-username,env:INGESTOR_MQTT_USERNAME"         default:"default"`
-	MQTTPassword    string   `arg:"--mqtt-password,env:INGESTOR_MQTT_PASSWORD"`
-	MQTTClientID    string   `arg:"--mqtt-client-id,env:INGESTOR_MQTT_CLIENT_ID"`
-	MQTTSSLInsecure bool     `arg:"--mqtt-ssl-insecure,env:INGESTOR_MQTT_SSL_INSECURE"`
-	MQTTCAFile      string   `arg:"--mqtt-ca-file,env:INGESTOR_MQTT_CA_FILE"`
-	MQTTID          string   `arg:"--mqtt-id,env:INGESTOR_MQTT_ID"`
-	HTTPAddress     string   `arg:"--http-address,env:INGESTOR_HTTP_ADDRESS"           default:"0.0.0.0:8080"`
-	LogLevel        string   `arg:"--log-level,env:INGESTOR_LOG_LEVEL"                 default:"info"`
+	RemoteWriteURL         string   `arg:"--remote-write-url,env:INGESTOR_REMOTE_WRITE_URL"                   default:"http://localhost:9201/api/v1/write"`
+	RemoteWriteUsername    string   `arg:"--remote-write-username,env:INGESTOR_REMOTE_WRITE_USERNAME"`
+	RemoteWritePassword    string   `arg:"--remote-write-password,env:INGESTOR_REMOTE_WRITE_PASSWORD"`
+	RemoteWriteBearerToken string   `arg:"--remote-write-bearer-token,env:INGESTOR_REMOTE_WRITE_BEARER_TOKEN"`
+	RemoteWriteHeader      []string `arg:"--remote-write-header,separate,env:INGESTOR_REMOTE_WRITE_HEADER"`
+	MQTTBrokerURL          []string `arg:"--mqtt-broker-url,env:INGESTOR_MQTT_BROKER_URL"`
+	MQTTUsername           string   `arg:"--mqtt-username,env:INGESTOR_MQTT_USERNAME"                         default:"default"`
+	MQTTPassword           string   `arg:"--mqtt-password,env:INGESTOR_MQTT_PASSWORD"`
+	MQTTClientID           string   `arg:"--mqtt-client-id,env:INGESTOR_MQTT_CLIENT_ID"`
+	MQTTSSLInsecure        bool     `arg:"--mqtt-ssl-insecure,env:INGESTOR_MQTT_SSL_INSECURE"`
+	MQTTCAFile             string   `arg:"--mqtt-ca-file,env:INGESTOR_MQTT_CA_FILE"`
+	MQTTID                 string   `arg:"--mqtt-id,env:INGESTOR_MQTT_ID"`
+	HTTPAddress            string   `arg:"--http-address,env:INGESTOR_HTTP_ADDRESS"                           default:"0.0.0.0:8080"`
+	LogLevel               string   `arg:"--log-level,env:INGESTOR_LOG_LEVEL"                                 default:"info"`
 }
 
 // Version implements --version argument.

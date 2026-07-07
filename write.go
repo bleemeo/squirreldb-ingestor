@@ -5,11 +5,13 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,6 +27,8 @@ const (
 
 var (
 	errInvalidURL       = errors.New("invalid remote write URL")
+	errInvalidAuth      = errors.New("invalid remote write authentication options")
+	errInvalidHeader    = errors.New("invalid remote write header")
 	errRequestRejected  = errors.New("the remote storage rejected the request")
 	errServersideError  = errors.New("the remote storage failed to process the request")
 	errTooManyRequests  = errors.New("the remote storage throttled the request")
@@ -35,6 +39,8 @@ var (
 // failure or a server-side error.
 type recoverableError struct {
 	err error
+	// retryAfter is the delay requested by the server, or 0.
+	retryAfter time.Duration
 }
 
 func (e recoverableError) Error() string {
@@ -53,34 +59,105 @@ func isRecoverable(err error) bool {
 	return errors.As(err, &recoverable)
 }
 
+// retryAfterDelay returns the retry delay requested by the server with the
+// error, or 0.
+func retryAfterDelay(err error) time.Duration {
+	var recoverable recoverableError
+
+	if errors.As(err, &recoverable) {
+		return recoverable.retryAfter
+	}
+
+	return 0
+}
+
 // Writer allows writing to a Prometheus remote write API.
 // It is not safe for concurrent use.
 type Writer struct {
 	url      string
 	client   *http.Client
+	headers  http.Header
 	metrics  *metrics
 	buf      []byte
 	protoBuf []byte
 }
 
 // NewWriter returns a new initialized writer.
-func NewWriter(rawURL string, metrics *metrics) (*Writer, error) {
-	u, err := url.Parse(rawURL)
+func NewWriter(opts Options, metrics *metrics) (*Writer, error) {
+	u, err := url.Parse(opts.RemoteWriteURL)
 	if err != nil {
-		return nil, fmt.Errorf("parse remote write URL '%s': %w", rawURL, err)
+		return nil, fmt.Errorf("parse remote write URL '%s': %w", opts.RemoteWriteURL, err)
 	}
 
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return nil, fmt.Errorf("%w: '%s' should begin with http:// or https://", errInvalidURL, rawURL)
+		return nil, fmt.Errorf("%w: '%s' should begin with http:// or https://", errInvalidURL, opts.RemoteWriteURL)
+	}
+
+	headers, err := writeRequestHeaders(opts)
+	if err != nil {
+		return nil, err
 	}
 
 	w := &Writer{
 		url:     u.String(),
 		client:  &http.Client{Timeout: clientTimeout},
+		headers: headers,
 		metrics: metrics,
 	}
 
 	return w, nil
+}
+
+// writeRequestHeaders builds the headers sent with the write requests,
+// including the authentication and the user-provided headers.
+func writeRequestHeaders(opts Options) (http.Header, error) {
+	headers := http.Header{}
+	headers.Set("Content-Type", "application/x-protobuf")
+	headers.Set("Content-Encoding", "snappy")
+	headers.Set("X-Prometheus-Remote-Write-Version", "0.1.0")
+	headers.Set("User-Agent", "squirreldb-ingestor/"+version)
+
+	for _, header := range opts.RemoteWriteHeader {
+		name, value, found := strings.Cut(header, "=")
+		if !found || name == "" {
+			return nil, fmt.Errorf("%w: '%s' should have the form 'Name=Value'", errInvalidHeader, header)
+		}
+
+		canonical := http.CanonicalHeaderKey(name)
+		if canonical == "Content-Type" || canonical == "Content-Encoding" ||
+			canonical == "X-Prometheus-Remote-Write-Version" {
+			return nil, fmt.Errorf("%w: '%s' is reserved by the remote write protocol", errInvalidHeader, name)
+		}
+
+		headers.Set(name, value)
+	}
+
+	hasBasic := opts.RemoteWriteUsername != ""
+	hasBearer := opts.RemoteWriteBearerToken != ""
+
+	if opts.RemoteWritePassword != "" && !hasBasic {
+		return nil, fmt.Errorf("%w: a password requires a username", errInvalidAuth)
+	}
+
+	if hasBasic && hasBearer {
+		return nil, fmt.Errorf("%w: the basic and bearer token authentications are exclusive", errInvalidAuth)
+	}
+
+	if (hasBasic || hasBearer) && headers.Get("Authorization") != "" {
+		return nil, fmt.Errorf("%w: an Authorization header can't be combined with other authentications", errInvalidAuth)
+	}
+
+	if hasBasic {
+		// Same encoding as http.Request.SetBasicAuth.
+		auth := opts.RemoteWriteUsername + ":" + opts.RemoteWritePassword
+		headers.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(auth)))
+	}
+
+	if hasBearer {
+		headers.Set("Authorization", "Bearer "+opts.RemoteWriteBearerToken)
+	}
+
+	return headers, nil
 }
 
 // Write samples to the configured Prometheus remote write endpoint.
@@ -99,10 +176,7 @@ func (w *Writer) Write(ctx context.Context, samples []sample) error {
 		return fmt.Errorf("create request: %w", err)
 	}
 
-	req.Header.Set("Content-Type", "application/x-protobuf")
-	req.Header.Set("Content-Encoding", "snappy")
-	req.Header.Set("X-Prometheus-Remote-Write-Version", "0.1.0")
-	req.Header.Set("User-Agent", "squirreldb-ingestor/"+version)
+	req.Header = w.headers.Clone()
 
 	start := time.Now()
 
@@ -111,7 +185,7 @@ func (w *Writer) Write(ctx context.Context, samples []sample) error {
 	w.metrics.writeDuration.Observe(time.Since(start).Seconds())
 
 	if err != nil {
-		return recoverableError{fmt.Errorf("remote write: %w", err)}
+		return recoverableError{err: fmt.Errorf("remote write: %w", err)}
 	}
 
 	defer resp.Body.Close()
@@ -131,12 +205,39 @@ func responseError(resp *http.Response) error {
 
 	switch {
 	case resp.StatusCode == http.StatusTooManyRequests:
-		return recoverableError{fmt.Errorf("%w: %s", errTooManyRequests, detail)}
+		return recoverableError{
+			err:        fmt.Errorf("%w: %s", errTooManyRequests, detail),
+			retryAfter: parseRetryAfter(resp),
+		}
 	case resp.StatusCode/100 == 5:
-		return recoverableError{fmt.Errorf("%w: %s", errServersideError, detail)}
+		return recoverableError{
+			err:        fmt.Errorf("%w: %s", errServersideError, detail),
+			retryAfter: parseRetryAfter(resp),
+		}
 	case resp.StatusCode/100 == 4:
 		return fmt.Errorf("%w: %s", errRequestRejected, detail)
 	default:
 		return fmt.Errorf("%w: %s", errUnexpectedStatus, detail)
 	}
+}
+
+// parseRetryAfter returns the delay requested by the Retry-After header of
+// the response, or 0.
+func parseRetryAfter(resp *http.Response) time.Duration {
+	value := resp.Header.Get("Retry-After")
+	if value == "" {
+		return 0
+	}
+
+	if seconds, err := strconv.Atoi(value); err == nil && seconds > 0 {
+		return time.Duration(seconds) * time.Second
+	}
+
+	if date, err := http.ParseTime(value); err == nil {
+		if delay := time.Until(date); delay > 0 {
+			return delay
+		}
+	}
+
+	return 0
 }

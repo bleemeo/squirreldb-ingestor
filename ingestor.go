@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"os"
 	"regexp"
 	"strings"
@@ -24,8 +25,13 @@ import (
 const (
 	// Delay between connection attempts to MQTT.
 	mqttRetryDelay = 10 * time.Second
-	// Delay between write attempts to the remote storage.
-	storageRetryDelay = 10 * time.Second
+	// Bounds of the exponential backoff between write attempts to the
+	// remote storage.
+	storageRetryMinDelay = time.Second
+	storageRetryMaxDelay = time.Minute
+	// Upper bound applied to the delay requested by the remote storage
+	// with a Retry-After header.
+	retryAfterMaxDelay = 5 * time.Minute
 	// Maximum number of points per write request to the remote storage.
 	batchMaxPoints = 10000
 	// Maximum delay before pending points are written to the remote storage.
@@ -104,7 +110,7 @@ func NewIngestor(opts Options) (*Ingestor, error) {
 		messages: make(chan message, messageQueueSize),
 	}
 
-	writer, err := NewWriter(opts.RemoteWriteURL, c.metrics)
+	writer, err := NewWriter(opts, c.metrics)
 	if err != nil {
 		return nil, err
 	}
@@ -362,11 +368,13 @@ func (c *Ingestor) flush(ctx context.Context, pending *batch) {
 
 	err := c.writer.Write(ctx, pending.samples)
 
-	for err != nil && isRecoverable(err) && ctx.Err() == nil {
-		log.Warn().Err(err).Msgf("Failed to write points to the remote storage, retry in %s", storageRetryDelay)
+	for attempt := 0; err != nil && isRecoverable(err) && ctx.Err() == nil; attempt++ {
+		delay := retryDelay(err, attempt)
+
+		log.Warn().Err(err).Msgf("Failed to write points to the remote storage, retry in %s", delay)
 
 		select {
-		case <-time.After(storageRetryDelay):
+		case <-time.After(delay):
 		case <-ctx.Done():
 			// Keep the batch, the final flush will make a last attempt.
 			return
@@ -390,6 +398,24 @@ func (c *Ingestor) flush(ctx context.Context, pending *batch) {
 		c.metrics.pointsDropped.WithLabelValues(dropReasonRejected).Add(float64(len(pending.samples)))
 		pending.done()
 	}
+}
+
+// retryDelay returns the delay before the given write retry attempt. It
+// honors the delay requested by the server when there is one, and otherwise
+// grows exponentially with jitter to avoid synchronized retries when several
+// ingestors are running.
+func retryDelay(err error, attempt int) time.Duration {
+	if delay := retryAfterDelay(err); delay > 0 {
+		return min(delay, retryAfterMaxDelay).Round(time.Millisecond)
+	}
+
+	const maxShift = 10 // Avoid a delay overflow with high attempt counts.
+
+	delay := min(storageRetryMinDelay<<min(attempt, maxShift), storageRetryMaxDelay)
+
+	// Full jitter on the upper half of the delay.
+	//nolint:gosec // G404: the jitter doesn't need cryptographic randomness.
+	return (delay/2 + rand.N(delay/2)).Round(time.Millisecond)
 }
 
 // finalFlush makes a last write attempt during shutdown. Points that can't be

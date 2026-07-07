@@ -46,9 +46,28 @@ Set the log level. The available levels are: trace, debug, info, warn, error, fa
 -  `--remote-write-url`, env: `INGESTOR_REMOTE_WRITE_URL`, default: http://localhost:9201/api/v1/write  
 The Prometheus remote write API URL.
 
+-  `--remote-write-username`, `--remote-write-password`, env: `INGESTOR_REMOTE_WRITE_USERNAME`, `INGESTOR_REMOTE_WRITE_PASSWORD`  
+The credentials used for basic authentication with the remote storage. Credentials embedded in
+the URL (`http://user:pass@host/api/v1/write`) are also supported. Prefer the environment
+variable over the command line argument for the password.
+
+-  `--remote-write-bearer-token`, env: `INGESTOR_REMOTE_WRITE_BEARER_TOKEN`  
+The bearer token used to authenticate with the remote storage, exclusive with the basic
+authentication.
+
+-  `--remote-write-header`, env: `INGESTOR_REMOTE_WRITE_HEADER`  
+An additional header sent with the write requests, of the form `Name=Value`. The argument can
+be repeated (in the environment variable, separate the headers with commas). For example, to
+write to a multi-tenant storage like Cortex or Mimir: `--remote-write-header X-Scope-OrgID=tenant1`.
+
 The received points are written in batches: a write request is sent as soon as 10000 points are
 pending, or after at most one second. MQTT messages are acknowledged only once their points have
 been written, so no point is lost if the ingestor is stopped while the remote storage is down.
+
+Failed writes are retried with an exponential backoff (from 1 second up to 1 minute, with
+jitter), and the `Retry-After` header is honored when the remote storage sends one. Requests
+definitively rejected by the storage (HTTP 4xx) are not retried: their points are dropped and
+counted in the `ingestor_points_dropped_total` metric.
 
 ### MQTT
 

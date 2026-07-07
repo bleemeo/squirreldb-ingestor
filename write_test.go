@@ -6,8 +6,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/golang/snappy"
 )
@@ -31,7 +33,7 @@ func TestNewWriterInvalidURL(t *testing.T) {
 	urls := []string{"://bad", "localhost:9201", "ftp://localhost"}
 
 	for _, rawURL := range urls {
-		if _, err := NewWriter(rawURL, newMetrics()); err == nil {
+		if _, err := NewWriter(Options{RemoteWriteURL: rawURL}, newMetrics()); err == nil {
 			t.Errorf("NewWriter(%q) succeeded, want an error", rawURL)
 		}
 	}
@@ -64,7 +66,7 @@ func TestWriterWrite(t *testing.T) {
 			}))
 			defer server.Close()
 
-			writer, err := NewWriter(server.URL, newMetrics())
+			writer, err := NewWriter(Options{RemoteWriteURL: server.URL}, newMetrics())
 			if err != nil {
 				t.Fatalf("NewWriter failed: %v", err)
 			}
@@ -90,7 +92,7 @@ func TestWriterWriteNetworkError(t *testing.T) {
 	}))
 	server.Close()
 
-	writer, err := NewWriter(server.URL, newMetrics())
+	writer, err := NewWriter(Options{RemoteWriteURL: server.URL}, newMetrics())
 	if err != nil {
 		t.Fatalf("NewWriter failed: %v", err)
 	}
@@ -127,7 +129,7 @@ func TestWriterWriteRequest(t *testing.T) {
 	}))
 	defer server.Close()
 
-	writer, err := NewWriter(server.URL, newMetrics())
+	writer, err := NewWriter(Options{RemoteWriteURL: server.URL}, newMetrics())
 	if err != nil {
 		t.Fatalf("NewWriter failed: %v", err)
 	}
@@ -167,7 +169,7 @@ func newTestIngestor(t *testing.T, serverURL string) (*Ingestor, *batch, *atomic
 
 	m := newMetrics()
 
-	writer, err := NewWriter(serverURL, m)
+	writer, err := NewWriter(Options{RemoteWriteURL: serverURL}, m)
 	if err != nil {
 		t.Fatalf("NewWriter failed: %v", err)
 	}
@@ -252,5 +254,210 @@ func TestFlushKeepsBatchOnCanceledContext(t *testing.T) {
 
 	if len(pending.samples) != 1 {
 		t.Errorf("The batch holds %d samples, want 1", len(pending.samples))
+	}
+}
+
+func TestNewWriterInvalidConfig(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		opts Options
+	}{
+		{
+			name: "password-without-username",
+			opts: Options{RemoteWritePassword: "secret"},
+		},
+		{
+			name: "basic-and-bearer",
+			opts: Options{RemoteWriteUsername: "user", RemoteWriteBearerToken: "token"},
+		},
+		{
+			name: "authorization-header-and-bearer",
+			opts: Options{
+				RemoteWriteBearerToken: "token",
+				RemoteWriteHeader:      []string{"Authorization=Basic dXNlcjo="},
+			},
+		},
+		{
+			name: "header-without-value",
+			opts: Options{RemoteWriteHeader: []string{"X-Scope-OrgID"}},
+		},
+		{
+			name: "header-without-name",
+			opts: Options{RemoteWriteHeader: []string{"=value"}},
+		},
+		{
+			name: "reserved-header",
+			opts: Options{RemoteWriteHeader: []string{"content-encoding=gzip"}},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			opts := test.opts
+			opts.RemoteWriteURL = "http://localhost:9201/api/v1/write"
+
+			if _, err := NewWriter(opts, newMetrics()); err == nil {
+				t.Errorf("NewWriter(%+v) succeeded, want an error", opts)
+			}
+		})
+	}
+}
+
+func TestWriterAuthentication(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		opts        Options
+		wantHeaders map[string]string
+	}{
+		{
+			name: "basic-auth",
+			opts: Options{RemoteWriteUsername: "user", RemoteWritePassword: "pass"},
+			wantHeaders: map[string]string{
+				// base64("user:pass")
+				"Authorization": "Basic dXNlcjpwYXNz",
+			},
+		},
+		{
+			name: "bearer-token",
+			opts: Options{RemoteWriteBearerToken: "some-token"},
+			wantHeaders: map[string]string{
+				"Authorization": "Bearer some-token",
+			},
+		},
+		{
+			name: "custom-headers",
+			opts: Options{RemoteWriteHeader: []string{"X-Scope-OrgID=tenant1", "X-Custom=a=b"}},
+			wantHeaders: map[string]string{
+				"X-Scope-Orgid": "tenant1",
+				// The value is cut on the first '='.
+				"X-Custom": "a=b",
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			var headers http.Header
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				headers = r.Header.Clone()
+
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			defer server.Close()
+
+			opts := test.opts
+			opts.RemoteWriteURL = server.URL
+
+			writer, err := NewWriter(opts, newMetrics())
+			if err != nil {
+				t.Fatalf("NewWriter failed: %v", err)
+			}
+
+			if err := writer.Write(t.Context(), testSamples()); err != nil {
+				t.Fatalf("Write() failed: %v", err)
+			}
+
+			for name, want := range test.wantHeaders {
+				if got := headers.Get(name); got != want {
+					t.Errorf("Header %s = %q, want %q", name, got, want)
+				}
+			}
+		})
+	}
+}
+
+// TestWriterURLUserinfo ensures the credentials embedded in the remote write
+// URL are used for basic authentication.
+func TestWriterURLUserinfo(t *testing.T) {
+	t.Parallel()
+
+	var authorization string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authorization = r.Header.Get("Authorization")
+
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	rawURL := strings.Replace(server.URL, "http://", "http://user:pass@", 1)
+
+	writer, err := NewWriter(Options{RemoteWriteURL: rawURL}, newMetrics())
+	if err != nil {
+		t.Fatalf("NewWriter failed: %v", err)
+	}
+
+	if err := writer.Write(t.Context(), testSamples()); err != nil {
+		t.Fatalf("Write() failed: %v", err)
+	}
+
+	// base64("user:pass")
+	if want := "Basic dXNlcjpwYXNz"; authorization != want {
+		t.Errorf("Authorization = %q, want %q", authorization, want)
+	}
+}
+
+func TestWriterRetryAfter(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", "7")
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	writer, err := NewWriter(Options{RemoteWriteURL: server.URL}, newMetrics())
+	if err != nil {
+		t.Fatalf("NewWriter failed: %v", err)
+	}
+
+	err = writer.Write(t.Context(), testSamples())
+	if err == nil {
+		t.Fatal("Write() succeeded, want an error")
+	}
+
+	if !isRecoverable(err) {
+		t.Fatalf("isRecoverable(%v) = false, want true", err)
+	}
+
+	if got := retryAfterDelay(err); got != 7*time.Second {
+		t.Errorf("retryAfterDelay(%v) = %s, want 7s", err, got)
+	}
+
+	if got := retryDelay(err, 0); got != 7*time.Second {
+		t.Errorf("retryDelay(%v, 0) = %s, want 7s", err, got)
+	}
+}
+
+func TestRetryDelay(t *testing.T) {
+	t.Parallel()
+
+	// Without a server-provided delay, the backoff grows exponentially
+	// from storageRetryMinDelay to storageRetryMaxDelay with jitter.
+	err := recoverableError{err: errServersideError}
+
+	for attempt := range 20 {
+		delay := retryDelay(err, attempt)
+
+		if delay < storageRetryMinDelay/2 || delay > storageRetryMaxDelay {
+			t.Errorf("retryDelay(err, %d) = %s, want between %s and %s",
+				attempt, delay, storageRetryMinDelay/2, storageRetryMaxDelay)
+		}
+	}
+
+	// The delay requested by the server is honored, but capped.
+	err = recoverableError{err: errServersideError, retryAfter: time.Hour}
+
+	if got := retryDelay(err, 0); got != retryAfterMaxDelay {
+		t.Errorf("retryDelay(err with huge Retry-After, 0) = %s, want %s", got, retryAfterMaxDelay)
 	}
 }
