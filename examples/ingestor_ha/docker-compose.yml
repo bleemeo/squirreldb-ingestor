@@ -1,10 +1,10 @@
-version: '3'
 services:
   # Note that the Gloutons in this docker compose are not intended for
-  # production, they are not running with the host network so they will 
+  # production, they are not running with the host network so they will
   # not be able to discover the services running on your server.
   glouton-1:
     image: bleemeo/bleemeo-agent
+    restart: unless-stopped
     hostname: server1.example.com
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -18,6 +18,7 @@ services:
 
   glouton-2:
     image: bleemeo/bleemeo-agent
+    restart: unless-stopped
     hostname: server2.example.com
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -31,6 +32,7 @@ services:
 
   squirreldb-ingestor-1:
     image: bleemeo/squirreldb-ingestor
+    restart: unless-stopped
     environment:
       - INGESTOR_REMOTE_WRITE_URL=http://squirreldb:9201/api/v1/write
       - INGESTOR_MQTT_BROKER_URL=nats-1:1883,nats-2:1883,nats-3:1883
@@ -40,6 +42,7 @@ services:
 
   squirreldb-ingestor-2:
     image: bleemeo/squirreldb-ingestor
+    restart: unless-stopped
     environment:
       - INGESTOR_REMOTE_WRITE_URL=http://squirreldb:9201/api/v1/write
       - INGESTOR_MQTT_BROKER_URL=nats-1:1883,nats-2:1883,nats-3:1883
@@ -56,9 +59,11 @@ services:
 
   redis:
     image: redis
+    restart: unless-stopped
 
   cassandra:
     image: cassandra
+    restart: unless-stopped
     cap_add:
     - SYS_NICE # Cassandra use mbind on NUMA system
     environment:
@@ -70,6 +75,7 @@ services:
 
   grafana:
     image: grafana/grafana
+    restart: unless-stopped
     volumes:
       - grafana-data:/var/lib/grafana
       - ./dashboards:/etc/grafana/provisioning/dashboards
@@ -80,19 +86,22 @@ services:
       - 127.0.0.1:3000:3000
 
   nats-1:
-    image: nats:2.9.5
+    image: nats:2.12
+    restart: unless-stopped
     command: -n nats-1 -c /etc/nats/nats-server.conf
     volumes:
       - ./nats.conf:/etc/nats/nats-server.conf:ro
 
   nats-2:
-    image: nats:2.9.5
+    image: nats:2.12
+    restart: unless-stopped
     command: -n nats-2 -c /etc/nats/nats-server.conf
     volumes:
       - ./nats.conf:/etc/nats/nats-server.conf:ro
 
   nats-3:
-    image: nats:2.9.5
+    image: nats:2.12
+    restart: unless-stopped
     command: -n nats-3 -c /etc/nats/nats-server.conf
     volumes:
       - ./nats.conf:/etc/nats/nats-server.conf:ro

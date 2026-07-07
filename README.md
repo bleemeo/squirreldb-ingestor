@@ -46,13 +46,21 @@ Set the log level. The available levels are: trace, debug, info, warn, error, fa
 -  `--remote-write-url`, env: `INGESTOR_REMOTE_WRITE_URL`, default: http://localhost:9201/api/v1/write  
 The Prometheus remote write API URL.
 
+The received points are written in batches: a write request is sent as soon as 10000 points are
+pending, or after at most one second. MQTT messages are acknowledged only once their points have
+been written, so no point is lost if the ingestor is stopped while the remote storage is down.
+
 ### MQTT
 
 -  `--mqtt-broker-url`, env: `INGESTOR_MQTT_BROKER_URL`, default: tcp://localhost:1883  
 The MQTT Broker URL, must begin by `tcp://`, or `ssl://`.
 
 -  `--mqtt-username`, `--mqtt-password`, env: `INGESTOR_MQTT_USERNAME`, `INGESTOR_MQTT_PASSWORD`  
-The credentials used to authenticate with MQTT. Note that the username is also used as the client ID.
+The credentials used to authenticate with MQTT.
+
+-  `--mqtt-client-id`, env: `INGESTOR_MQTT_CLIENT_ID`, default: the MQTT username  
+The MQTT client ID. Two clients connecting with the same client ID disconnect each other,
+so this option must be set when multiple ingestors share the same username.
 
 -  `--mqtt-ssl-insecure`, env: `INGESTOR_MQTT_SSL_INSECURE`  
 Allow insecure SSL connection.
@@ -65,6 +73,16 @@ If set, the ingestor listens to the MQTT topic `v1/agent/fqdn/data/MQTT_ID`. Thi
 [NATS subject mapping](https://docs.nats.io/running-a-nats-service/configuration/configuring_subject_mapping), 
 to configure the topic this ingestor should listen on. More details are available in the [setup example](#nats-subject-mapping).
 
+### Observability
+
+-  `--http-address`, env: `INGESTOR_HTTP_ADDRESS`, default: 0.0.0.0:8080  
+The address of the HTTP server exposing the ingestor internals. Set it to an empty string to
+disable the HTTP server. Two endpoints are available:
+   - `/metrics`: the ingestor metrics in the Prometheus format (points received, written and
+     dropped, write request durations, MQTT connection status...).
+   - `/healthz`: returns HTTP 200 when the MQTT connection is established, and HTTP 503
+     otherwise. It can be used as a liveness or readiness probe.
+
 ## Setup example
 
 In this example, we are going to setup a Grafana dashboard from metrics sent by two Gloutons over MQTT.
@@ -74,23 +92,23 @@ SquirrelDB and Grafana. It provides a NATS cluster with three nodes for high ava
 
 ```sh
 cd examples/ingestor_ha
-docker-compose up -d
+docker compose up -d
 ```
 
-Now you can check that the ingestor is connected to MQTT. The logs should say `MQTT connection established`.
+Now you can check that the ingestors are connected to MQTT. The logs should say `MQTT connection established`.
 ```sh
-docker-compose logs -f squirreldb-ingestor 
+docker compose logs -f squirreldb-ingestor-1 squirreldb-ingestor-2
 ```
 
 Also check that the agents connected to MQTT, you should see `Open Source MQTT connection established`:
 ```sh
-docker-compose logs -f glouton-1 glouton-2
+docker compose logs -f glouton-1 glouton-2
 ```
 
 Then go to the Grafana dashboard at http://localhost:3000/d/83ceCuenk/, and log in with the user
 "admin" and the password "password". You can monitor all your servers from this dashboard.
 
-### High availabity
+### High availability
 
 This setup provides a NATS cluster to have high availability for MQTT.
 
@@ -98,7 +116,7 @@ SquirrelDB, Cassandra and Redis are running with a single node in the example,
 but they can also be scaled, an example is available
 [here](https://github.com/bleemeo/squirreldb/tree/master/examples/squirreldb_ha).
 
-For true high availability, each component must run on a different node, which is is not done by the docker compose.
+For true high availability, each component must run on a different node, which is not done by the docker compose.
 
 ## Connecting your agents
 
@@ -137,20 +155,20 @@ docker run -d --name="bleemeo-agent" \
     --cap-add SYS_PTRACE --cap-add SYS_ADMIN bleemeo/bleemeo-agent
 ```
 
-## Authentication and autorizations with NATS
+## Authentication and authorizations with NATS
 
 An example NATS cluster configuration is available in `examples/ingestor_ha/nats.conf`. 
-For each new user, you need to add it the `authorization` block of the configuration with the right
-permissions to allow it to only publish to a single topic. 
+For each new user, you need to add it to the `authorization` block of the configuration with the
+right permissions to allow it to only publish to a single topic. 
 
 Let's say we want to monitor two servers, `server1.example.com` and `server2.example.com`. 
-The autorizations should look like this:
+The authorizations should look like this:
 
 ```conf
 authorization {
     # Allow the ingestor to listen on the MQTT topic "v1/agent/+/data".
     # https://docs.nats.io/running-a-nats-service/configuration/mqtt#mqtt-topics-and-nats-subjects
-    # We also allow need to allow "$MQTT.sub.>" because NATS uses this topic to store durable subsription.
+    # We also need to allow "$MQTT.sub.>" because NATS uses this topic to store durable subscriptions.
     # https://docs.nats.io/running-a-nats-service/configuration/mqtt/mqtt_config#special-permissions
     ingestor_perms = {
         subscribe = ["v1.agent.*.data", "$MQTT.sub.>"]
@@ -170,7 +188,7 @@ authorization {
     users = [
         {user: ingestor, password: passw0rd, permissions: $ingestor_perms, allowed_connection_types: ["MQTT"]}
         {user: server1, password: passw0rd, permissions: $server1_perms, allowed_connection_types: ["MQTT"]}
-        {user: server2, password: passw0rd, permissions: $server1_perms, allowed_connection_types: ["MQTT"]}
+        {user: server2, password: passw0rd, permissions: $server2_perms, allowed_connection_types: ["MQTT"]}
     ]
 }
 ```
@@ -178,7 +196,7 @@ authorization {
 ## Scaling the ingestor
 
 [NATS subject mapping](https://docs.nats.io/running-a-nats-service/configuration/configuring_subject_mapping)
-allows to distribute messages received on a topic to multiple topics. This make it possible to use multiple
+allows to distribute messages received on a topic to multiple topics. This makes it possible to use multiple
 ingestors. Note that this works only with nats-server > v2.9.4.
 
 For example to run two ingestors you can use the following NATS mapping configuration:
@@ -187,8 +205,8 @@ mappings = {
   # Distribute the messages received on "v1/agent/+/data" to two topics.
   # One ingestor listens on "v1/agent/+/data/1" and the other on "v1/agent/+/data/2".
   v1.agent.*.data: [
-    { destination: v1.agent.$1.data-1, weight: 50% },
-    { destination: v1.agent.$1.data-2, weight: 50% }
+    { destination: v1.agent.$1.data.1, weight: 50% },
+    { destination: v1.agent.$1.data.2, weight: 50% }
   ]
 }
 ```

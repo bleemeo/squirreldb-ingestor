@@ -27,9 +27,11 @@ type Options struct {
 	MQTTBrokerURL   []string `arg:"--mqtt-broker-url,env:INGESTOR_MQTT_BROKER_URL"`
 	MQTTUsername    string   `arg:"--mqtt-username,env:INGESTOR_MQTT_USERNAME"         default:"default"`
 	MQTTPassword    string   `arg:"--mqtt-password,env:INGESTOR_MQTT_PASSWORD"`
+	MQTTClientID    string   `arg:"--mqtt-client-id,env:INGESTOR_MQTT_CLIENT_ID"`
 	MQTTSSLInsecure bool     `arg:"--mqtt-ssl-insecure,env:INGESTOR_MQTT_SSL_INSECURE"`
 	MQTTCAFile      string   `arg:"--mqtt-ca-file,env:INGESTOR_MQTT_CA_FILE"`
 	MQTTID          string   `arg:"--mqtt-id,env:INGESTOR_MQTT_ID"`
+	HTTPAddress     string   `arg:"--http-address,env:INGESTOR_HTTP_ADDRESS"           default:"0.0.0.0:8080"`
 	LogLevel        string   `arg:"--log-level,env:INGESTOR_LOG_LEVEL"                 default:"info"`
 }
 
@@ -49,6 +51,11 @@ func main() {
 		opts.MQTTBrokerURL = []string{"tcp://localhost:1883"}
 	}
 
+	// The client ID defaults to the username to keep backward compatibility.
+	if opts.MQTTClientID == "" {
+		opts.MQTTClientID = opts.MQTTUsername
+	}
+
 	// Setup logger.
 	writer := zerolog.ConsoleWriter{
 		Out:        os.Stdout,
@@ -65,13 +72,18 @@ func main() {
 	// Change the default time format of zerolog to allow millisecond precision.
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnixMs
 
+	log.Info().Msgf("Starting SquirrelDB Ingestor version %s (commit %s)", version, commit)
+
+	ingestor, err := NewIngestor(opts)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to initialize the ingestor")
+	}
+
 	// Run the ingestor.
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	log.Info().Msgf("Starting SquirrelDB Ingestor version %s (commit %s)", version, commit)
-
-	NewIngestor(opts).Run(ctx)
+	ingestor.Run(ctx)
 
 	log.Info().Msg("SquirrelDB Ingestor stopped")
 }
