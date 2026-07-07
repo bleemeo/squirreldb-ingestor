@@ -56,7 +56,9 @@ been written, so no point is lost if the ingestor is stopped while the remote st
 The MQTT Broker URL, must begin by `tcp://`, or `ssl://`.
 
 -  `--mqtt-username`, `--mqtt-password`, env: `INGESTOR_MQTT_USERNAME`, `INGESTOR_MQTT_PASSWORD`  
-The credentials used to authenticate with MQTT.
+The credentials used to authenticate with MQTT. Prefer the environment variable over the
+command line argument for the password: command line arguments are visible to the other users
+of the machine.
 
 -  `--mqtt-client-id`, env: `INGESTOR_MQTT_CLIENT_ID`, default: the MQTT username  
 The MQTT client ID. Two clients connecting with the same client ID disconnect each other,

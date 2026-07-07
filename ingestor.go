@@ -217,6 +217,11 @@ func (c *Ingestor) connectOnce(ctx context.Context) error {
 		isTimeout = !token.WaitTimeout(timeout)
 	}
 
+	if isTimeout {
+		// The context was canceled before the connection completed.
+		return fmt.Errorf("connect: %w", ctx.Err())
+	}
+
 	if token.Error() != nil {
 		return fmt.Errorf("connect: %w", token.Error())
 	}
