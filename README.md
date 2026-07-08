@@ -82,6 +82,10 @@ The options can be set with environment variables or command line arguments.
 -  `--log-level`, env: `INGESTOR_LOG_LEVEL` , default: info  
 Set the log level. The available levels are: trace, debug, info, warn, error, fatal, panic and disabled.  
 
+-  `--log-format`, env: `INGESTOR_LOG_FORMAT`, default: console  
+Set the log format: `console` for a human-readable output, `json` for structured logs meant for
+a log aggregator (Loki, Elasticsearch...).
+
 ### Remote storage
 
 -  `--remote-write-url`, env: `INGESTOR_REMOTE_WRITE_URL`, default: http://localhost:9201/api/v1/write  
@@ -194,6 +198,9 @@ Also check that the agents connected to MQTT, you should see `Open Source MQTT c
 ```sh
 docker compose logs -f glouton-1 glouton-2
 ```
+
+The internal metrics of the two ingestors are exposed at http://localhost:8080/metrics and
+http://localhost:8081/metrics (see [Observability](#observability)).
 
 Then go to the Grafana dashboard at http://localhost:3000/d/83ceCuenk/, and log in with the user
 "admin" and the password "password". You can monitor all your servers from this dashboard.

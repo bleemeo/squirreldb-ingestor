@@ -37,6 +37,7 @@ type Options struct {
 	MQTTID                 string   `arg:"--mqtt-id,env:INGESTOR_MQTT_ID"`
 	HTTPAddress            string   `arg:"--http-address,env:INGESTOR_HTTP_ADDRESS"                           default:"0.0.0.0:8080"`
 	LogLevel               string   `arg:"--log-level,env:INGESTOR_LOG_LEVEL"                                 default:"info"`
+	LogFormat              string   `arg:"--log-format,env:INGESTOR_LOG_FORMAT"                               default:"console"`
 }
 
 // Version implements --version argument.
@@ -61,20 +62,27 @@ func main() {
 	}
 
 	// Setup logger.
-	writer := zerolog.ConsoleWriter{
-		Out:        os.Stdout,
-		TimeFormat: "2006-01-02 15:04:05.000",
-	}
-
 	logLevel, err := zerolog.ParseLevel(opts.LogLevel)
 	if err != nil {
 		log.Fatal().Msgf("Failed to parse log level: %s", err)
 	}
 
-	log.Logger = log.Output(writer).With().Timestamp().Logger().Level(logLevel)
-
 	// Change the default time format of zerolog to allow millisecond precision.
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnixMs
+
+	switch opts.LogFormat {
+	case "console":
+		writer := zerolog.ConsoleWriter{
+			Out:        os.Stdout,
+			TimeFormat: "2006-01-02 15:04:05.000",
+		}
+
+		log.Logger = log.Output(writer).With().Timestamp().Logger().Level(logLevel)
+	case "json":
+		log.Logger = zerolog.New(os.Stdout).With().Timestamp().Logger().Level(logLevel)
+	default:
+		log.Fatal().Msgf("Unknown log format '%s', expected 'console' or 'json'", opts.LogFormat)
+	}
 
 	log.Info().Msgf("Starting SquirrelDB Ingestor version %s (commit %s)", version, commit)
 

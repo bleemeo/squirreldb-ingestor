@@ -39,6 +39,9 @@ services:
       - INGESTOR_MQTT_USERNAME=ingestor0
       - INGESTOR_MQTT_PASSWORD=passw0rd
       - INGESTOR_MQTT_ID=0
+    ports:
+      # The ingestor metrics and health endpoints.
+      - 127.0.0.1:8080:8080
 
   squirreldb-ingestor-2:
     image: bleemeo/squirreldb-ingestor
@@ -49,6 +52,9 @@ services:
       - INGESTOR_MQTT_USERNAME=ingestor1
       - INGESTOR_MQTT_PASSWORD=passw0rd
       - INGESTOR_MQTT_ID=1
+    ports:
+      # The ingestor metrics and health endpoints.
+      - 127.0.0.1:8081:8080
 
   squirreldb:
     image: bleemeo/squirreldb

@@ -44,11 +44,15 @@ const (
 	finalFlushTimeout = 5 * time.Second
 	// Time given to the MQTT client to disconnect cleanly, in ms.
 	mqttDisconnectTimeoutMS = 1000
+	// Maximum decompressed size of an MQTT payload, to reject decompression
+	// bombs. Real messages are well under 1 MB.
+	maxDecompressedSize = 10 << 20
 )
 
 var (
-	errParseFQDN = errors.New("could not parse FQDN")
-	errNotPem    = errors.New("not a PEM file")
+	errParseFQDN       = errors.New("could not parse FQDN")
+	errNotPem          = errors.New("not a PEM file")
+	errPayloadTooLarge = errors.New("decompressed payload too large")
 )
 
 var dataTopicRegex = regexp.MustCompile("^v1/agent/(.*)/data")
@@ -475,16 +479,22 @@ func decode(input []byte, obj any) error {
 		return fmt.Errorf("zlib reader: %w", err)
 	}
 
-	err = json.NewDecoder(decoder).Decode(obj)
+	// Bound the decompressed size: without it, a small crafted payload
+	// could expand to gigabytes and take the ingestor down.
+	limited := &io.LimitedReader{R: decoder, N: maxDecompressedSize + 1}
+
+	err = json.NewDecoder(limited).Decode(obj)
 	if err != nil {
 		return fmt.Errorf("decode JSON: %w", err)
 	}
 
-	//nolint:gosec // G110: Potential DoS vulnerability via a decompression bomb.
-	// False positive: copying to discard can't lead to memory exhaustion.
-	_, err = io.Copy(io.Discard, decoder)
+	_, err = io.Copy(io.Discard, limited)
 	if err != nil {
 		return fmt.Errorf("copy: %w", err)
+	}
+
+	if limited.N <= 0 {
+		return errPayloadTooLarge
 	}
 
 	if err := decoder.Close(); err != nil {

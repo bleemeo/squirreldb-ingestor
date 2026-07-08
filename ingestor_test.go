@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -101,7 +102,7 @@ func TestDecode(t *testing.T) {
 
 	want := []metricPayload{
 		{
-			LabelsText:  `__name__="cpu_used"`,
+			LabelsText:  `__name__="cpu_used_decode"`,
 			TimestampMS: 1600000000000,
 			Value:       42.5,
 		},
@@ -147,6 +148,25 @@ func TestDecodeInvalid(t *testing.T) {
 				t.Errorf("decode(%q) succeeded, want an error", test.payload)
 			}
 		})
+	}
+}
+
+// TestDecodeBomb ensures a payload expanding over the decompressed size limit
+// is rejected instead of exhausting the memory.
+func TestDecodeBomb(t *testing.T) {
+	t.Parallel()
+
+	// A highly compressible 60 MB payload: a few kilobytes compressed.
+	bomb := compress(t, []byte(`[{"labels_text":"`+strings.Repeat("a", 60<<20)+`"}]`))
+
+	if len(bomb) > 1<<20 {
+		t.Fatalf("The compressed bomb is %d bytes, expected it to be small", len(bomb))
+	}
+
+	var got []metricPayload
+
+	if err := decode(bomb, &got); err == nil {
+		t.Error("decode() accepted a decompression bomb, want an error")
 	}
 }
 
