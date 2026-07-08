@@ -1,37 +1,78 @@
 # SquirrelDB Ingestor
 
 [![Go Report Card](https://goreportcard.com/badge/github.com/bleemeo/squirreldb-ingestor)](https://goreportcard.com/report/github.com/bleemeo/squirreldb-ingestor)
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/bleemeo/squirreldb-ingestor/blob/master/LICENSE)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/bleemeo/squirreldb-ingestor/blob/main/LICENSE)
 [![Docker Image Version](https://img.shields.io/docker/v/bleemeo/squirreldb-ingestor)](https://hub.docker.com/r/bleemeo/squirreldb-ingestor/tags)
 [![Docker Image Size](https://img.shields.io/docker/image-size/bleemeo/squirreldb-ingestor)](https://hub.docker.com/r/bleemeo/squirreldb-ingestor)
 
-SquirrelDB Ingestor reads metrics sent by [Glouton](https://github.com/bleemeo/glouton) over MQTT 
-and stores them in [SquirrelDB](https://github.com/bleemeo/squirreldb) (or any other component
-compatible with Prometheus remote write).
+SquirrelDB Ingestor is the bridge of a **push-based monitoring pipeline**: it reads the metrics
+that [Glouton](https://github.com/bleemeo/glouton) agents publish over MQTT and writes them to
+[SquirrelDB](https://github.com/bleemeo/squirreldb) — or any other storage compatible with the
+Prometheus remote write API.
 
-An example Docker Compose with Glouton, SquirrelDB and Grafana is available
-[here](https://github.com/bleemeo/glouton/tree/master/examples/mqtt).
+![Architecture](docs/architecture.svg)
 
-To use authenticated MQTT connections and a high availability setup, check out the [setup example](#setup-example).
+## Why push metrics over MQTT?
 
-![](squirreldb-ingestor.drawio.png)
+A classic Prometheus setup *pulls*: the server must be able to reach every agent, discover them,
+and scrape each one on an interval. This pipeline reverses the flow — agents *push* their metrics
+to a message broker, and the ingestor drains the broker into the storage. This changes a few
+things that matter when you monitor a large or heterogeneous fleet:
 
-## Run
+- **Works behind NAT and firewalls.** Agents only open a single outbound MQTT connection (TLS
+  supported). No inbound port to expose, no service discovery to maintain, no VPN to reach
+  servers sitting at the edge, in branch offices or at customers' premises.
 
-SquirrelDB Ingestor can be run with Docker or as a binary.
+- **Scales with the number of agents.** A NATS cluster handles a very large number of persistent
+  MQTT connections, and the write path scales horizontally: NATS subject mapping partitions the
+  agents across as many ingestors as needed (see [Scaling the ingestor](#scaling-the-ingestor)).
+  The ingestor itself is stateless and batches points before writing them.
 
-### Docker
+- **Fresh data.** A point is pushed as soon as the agent produces it and written to the storage
+  within about a second of its arrival. There is no scrape interval between a value being
+  produced and being queryable — end-to-end latency is dominated by the agent's own collection
+  interval, not by the pipeline.
 
-```sh
-docker run -d --name="squirreldb-ingestor" bleemeo/squirreldb-ingestor
+- **No data loss.** Messages are published with MQTT QoS 1 and persisted by NATS JetStream. The
+  ingestor acknowledges a message only once its points are written to the storage, so metrics
+  survive an ingestor or storage outage: they are buffered in NATS and delivered when the
+  pipeline recovers (see [Reliability](#reliability)).
+
+- **Spoofing-resistant.** Each agent is only allowed to publish to its own topic (NATS
+  authorization), and the ingestor overwrites the `instance` label of every point with the
+  identity taken from the authenticated topic. A compromised agent can lie about its values, but
+  not impersonate another server.
+
+- **Storage agnostic.** The ingestor speaks standard Prometheus remote write: SquirrelDB,
+  Prometheus (with the remote write receiver enabled), Mimir, Cortex, VictoriaMetrics, Thanos…
+  Multi-tenant storages are supported through custom headers.
+
+The main thing the pull model gives you that push does not is the free `up` metric: with push, a
+silent agent produces no data instead of a scrape failure. Alert on the absence of data instead,
+for example with `absent()` or a staleness expression such as:
+
+```promql
+time() - max by (instance) (timestamp(node_load1)) > 120
 ```
 
-### Binary
+## Quick start
 
-Grab the latest binary [release](https://github.com/bleemeo/squirreldb-ingestor/releases/latest) and run it:
+A complete Docker Compose with Glouton, NATS, SquirrelDB Ingestor, SquirrelDB and Grafana is
+available in the [setup example](#setup-example). To run the ingestor alone:
 
 ```sh
-./squirreldb-ingestor
+docker run -d --name="squirreldb-ingestor" \
+    -e INGESTOR_MQTT_BROKER_URL=tcp://<your-broker>:1883 \
+    -e INGESTOR_REMOTE_WRITE_URL=http://<your-storage>:9201/api/v1/write \
+    bleemeo/squirreldb-ingestor
+```
+
+Or grab the latest binary [release](https://github.com/bleemeo/squirreldb-ingestor/releases/latest)
+and run it:
+
+```sh
+./squirreldb-ingestor --mqtt-broker-url tcp://<your-broker>:1883 \
+    --remote-write-url http://<your-storage>:9201/api/v1/write
 ```
 
 ## Configuration
@@ -60,15 +101,6 @@ An additional header sent with the write requests, of the form `Name=Value`. The
 be repeated (in the environment variable, separate the headers with commas). For example, to
 write to a multi-tenant storage like Cortex or Mimir: `--remote-write-header X-Scope-OrgID=tenant1`.
 
-The received points are written in batches: a write request is sent as soon as 10000 points are
-pending, or after at most one second. MQTT messages are acknowledged only once their points have
-been written, so no point is lost if the ingestor is stopped while the remote storage is down.
-
-Failed writes are retried with an exponential backoff (from 1 second up to 1 minute, with
-jitter), and the `Retry-After` header is honored when the remote storage sends one. Requests
-definitively rejected by the storage (HTTP 4xx) are not retried: their points are dropped and
-counted in the `ingestor_points_dropped_total` metric.
-
 ### MQTT
 
 -  `--mqtt-broker-url`, env: `INGESTOR_MQTT_BROKER_URL`, default: tcp://localhost:1883  
@@ -92,17 +124,46 @@ Provide your own SSL certificate, this should be the path to a PEM file.
 - `--mqtt-id`, env: `INGESTOR_MQTT_ID`
 If set, the ingestor listens to the MQTT topic `v1/agent/fqdn/data/MQTT_ID`. This is useful only if you use 
 [NATS subject mapping](https://docs.nats.io/running-a-nats-service/configuration/configuring_subject_mapping), 
-to configure the topic this ingestor should listen on. More details are available in the [setup example](#nats-subject-mapping).
+to configure the topic this ingestor should listen on. More details are available in
+[Scaling the ingestor](#scaling-the-ingestor).
 
 ### Observability
 
 -  `--http-address`, env: `INGESTOR_HTTP_ADDRESS`, default: 0.0.0.0:8080  
 The address of the HTTP server exposing the ingestor internals. Set it to an empty string to
 disable the HTTP server. Two endpoints are available:
-   - `/metrics`: the ingestor metrics in the Prometheus format (points received, written and
-     dropped, write request durations, MQTT connection status...).
+   - `/metrics`: the ingestor metrics in the Prometheus format.
    - `/healthz`: returns HTTP 200 when the MQTT connection is established, and HTTP 503
      otherwise. It can be used as a liveness or readiness probe.
+
+The following metrics are exposed, along with the standard Go and process collectors:
+
+| Metric | Description |
+|---|---|
+| `ingestor_mqtt_connected` | Whether the MQTT connection is currently established. |
+| `ingestor_mqtt_messages_received_total` | Messages received over MQTT. |
+| `ingestor_mqtt_messages_dropped_total{reason}` | Messages dropped because they could not be processed. |
+| `ingestor_points_received_total` | Points received over MQTT. |
+| `ingestor_points_written_total` | Points successfully written to the remote storage. |
+| `ingestor_points_dropped_total{reason}` | Points dropped because they could not be written. |
+| `ingestor_write_request_duration_seconds` | Duration of the requests to the remote write API. |
+
+## Reliability
+
+The pipeline is designed so that a crash or an outage of any component doesn't lose metrics:
+
+- Points are written in batches: a write request is sent as soon as 10000 points are pending, or
+  after at most one second.
+- MQTT messages are acknowledged only once their points have been written. If the ingestor is
+  stopped or crashes while the storage is down, the unacknowledged messages stay in NATS
+  JetStream and are delivered again on the next start (delivery is at-least-once; remote write
+  storages handle the resulting duplicate points gracefully).
+- Failed writes are retried with an exponential backoff (from 1 second up to 1 minute, with
+  jitter so that several ingestors don't retry in lockstep), and the `Retry-After` header is
+  honored when the remote storage sends one.
+- Requests definitively rejected by the storage (HTTP 4xx) are not retried: their points are
+  dropped and counted in `ingestor_points_dropped_total`, so a single malformed payload can
+  never block the rest of the ingestion.
 
 ## Setup example
 
@@ -217,29 +278,28 @@ authorization {
 ## Scaling the ingestor
 
 [NATS subject mapping](https://docs.nats.io/running-a-nats-service/configuration/configuring_subject_mapping)
-allows to distribute messages received on a topic to multiple topics. This makes it possible to use multiple
-ingestors. Note that this works only with nats-server > v2.9.4.
+can distribute the messages received on the data topic across several ingestors. Use
+deterministic partitioning: each agent is assigned to a partition based on a hash of its FQDN, so
+the points of a given server are always processed by the same ingestor and stay in order:
 
-For example to run two ingestors you can use the following NATS mapping configuration:
 ```conf
 mappings = {
-  # Distribute the messages received on "v1/agent/+/data" to two topics.
-  # One ingestor listens on "v1/agent/+/data/1" and the other on "v1/agent/+/data/2".
-  v1.agent.*.data: [
-    { destination: v1.agent.$1.data.1, weight: 50% },
-    { destination: v1.agent.$1.data.2, weight: 50% }
-  ]
+  # Distribute the agents across two partitions: "v1/agent/<fqdn>/data" is rewritten to
+  # "v1/agent/<fqdn>/data/0" or "v1/agent/<fqdn>/data/1" based on a hash of the FQDN.
+  v1.agent.*.data: "v1.agent.{{wildcard(1)}}.data.{{partition(2,1)}}"
 }
 ```
 
-Then you need to pass the argument `--mqtt-id 1` to the first ingestor and 
-`--mqtt-id 2` to the second.
+Then run one ingestor per partition, with `--mqtt-id 0` and `--mqtt-id 1` (and distinct MQTT
+usernames or `--mqtt-client-id` values). This requires nats-server 2.9.5 or later; the example
+was tested with NATS 2.12.
 
-Note that running multiple ingestors doesn't give you high availability, if one ingestor
-is down, the messages won't be processed until it's restarted. This is not much of an issue
-since the messages are buffered in NATS so you won't lose any metric. Moreover, the ingestor is
-stateless, so it can be restarted with the same configuration, which might be automated by an 
-orchestrator like Kubernetes.
+Note that running multiple ingestors doesn't give you high availability: if one ingestor is
+down, the messages of its partition won't be processed until it's restarted. This is not much of
+an issue since the messages are buffered in NATS, so you won't lose any metric. Moreover, the
+ingestor is stateless, so it can be restarted with the same configuration, which might be
+automated by an orchestrator like Kubernetes (the `/healthz` endpoint can serve as the liveness
+probe).
 
 ## Contributing
 

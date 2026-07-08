@@ -36,9 +36,9 @@ services:
     environment:
       - INGESTOR_REMOTE_WRITE_URL=http://squirreldb:9201/api/v1/write
       - INGESTOR_MQTT_BROKER_URL=nats-1:1883,nats-2:1883,nats-3:1883
-      - INGESTOR_MQTT_USERNAME=ingestor1
+      - INGESTOR_MQTT_USERNAME=ingestor0
       - INGESTOR_MQTT_PASSWORD=passw0rd
-      - INGESTOR_MQTT_ID=1
+      - INGESTOR_MQTT_ID=0
 
   squirreldb-ingestor-2:
     image: bleemeo/squirreldb-ingestor
@@ -46,9 +46,9 @@ services:
     environment:
       - INGESTOR_REMOTE_WRITE_URL=http://squirreldb:9201/api/v1/write
       - INGESTOR_MQTT_BROKER_URL=nats-1:1883,nats-2:1883,nats-3:1883
-      - INGESTOR_MQTT_USERNAME=ingestor2
+      - INGESTOR_MQTT_USERNAME=ingestor1
       - INGESTOR_MQTT_PASSWORD=passw0rd
-      - INGESTOR_MQTT_ID=2
+      - INGESTOR_MQTT_ID=1
 
   squirreldb:
     image: bleemeo/squirreldb
