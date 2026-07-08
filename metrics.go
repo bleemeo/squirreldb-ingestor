@@ -33,6 +33,7 @@ const (
 type metrics struct {
 	registry              *prometheus.Registry
 	messagesReceived      prometheus.Counter
+	messagesDeferred      prometheus.Counter
 	messagesDroppedTopic  prometheus.Counter
 	messagesDroppedDecode prometheus.Counter
 	pointsReceived        prometheus.Counter
@@ -77,6 +78,11 @@ func newMetrics(connected *atomic.Bool) *metrics {
 		messagesReceived: factory.NewCounter(prometheus.CounterOpts{
 			Name: "ingestor_mqtt_messages_received_total",
 			Help: "Total number of messages received over MQTT.",
+		}),
+		messagesDeferred: factory.NewCounter(prometheus.CounterOpts{
+			Name: "ingestor_mqtt_messages_deferred_total",
+			Help: "Total number of MQTT messages left unacknowledged because the queue was full, " +
+				"to be redelivered by the broker.",
 		}),
 		messagesDroppedTopic:  messagesDropped.WithLabelValues(dropReasonTopic),
 		messagesDroppedDecode: messagesDropped.WithLabelValues(dropReasonDecode),

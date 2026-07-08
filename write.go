@@ -216,8 +216,9 @@ func (w *Writer) Write(ctx context.Context, samples []sample) error {
 // recoverable error when the request can be retried.
 func responseError(resp *http.Response) error {
 	if resp.StatusCode/100 == 2 {
-		// Drain the body so the connection can be reused.
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxErrorBodySize))
+		// Fully drain the body so the connection can be reused. The client
+		// timeout bounds the read, so a misbehaving server can't block here.
+		_, _ = io.Copy(io.Discard, resp.Body)
 
 		return nil
 	}

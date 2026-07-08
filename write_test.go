@@ -394,7 +394,7 @@ func newTestIngestor(t *testing.T, serverURL string) *Ingestor {
 		t.Fatalf("NewWriter failed: %v", err)
 	}
 
-	return &Ingestor{writer: writer, metrics: m, queue: newMessageQueue()}
+	return &Ingestor{writer: writer, metrics: m, queue: newMessageQueue(queueMaxPoints)}
 }
 
 func TestFlushSuccess(t *testing.T) {

@@ -32,6 +32,10 @@ const (
 	retryAfterMaxDelay = 5 * time.Minute
 	// Maximum number of points per write request to the remote storage.
 	batchMaxPoints = 10000
+	// Maximum number of points held in the queue between the MQTT handler
+	// and the writer. Beyond this, messages are left unacknowledged for the
+	// broker to redeliver, bounding the memory during a storage outage.
+	queueMaxPoints = 200000
 	// Maximum delay before pending points are written to the remote storage.
 	batchFlushInterval = time.Second
 	// Timeout of the last write attempt during shutdown.
@@ -70,32 +74,49 @@ type message struct {
 	ack     func()
 }
 
-// messageQueue is an unbounded queue of decoded messages. The MQTT handler
-// must never block: a blocked handler stalls the paho routing goroutine,
-// which also processes the keepalive responses, and the connection would
-// flap during storage outages. Flow control comes from the broker instead:
-// messages are acknowledged only once written, and the broker stops
-// delivering after its in-flight window of unacknowledged messages, which
-// bounds the queue memory.
+// messageQueue is a queue of decoded messages between the MQTT handler and
+// the writer. The MQTT handler must never block: a blocked handler stalls the
+// paho routing goroutine, which also processes the keepalive responses, and
+// the connection would flap during storage outages. So instead of blocking
+// when full, push rejects the message; the caller then leaves it
+// unacknowledged and the broker delivers it again later. This bounds the
+// queue memory (a decoded message is much larger than the wire payload) for
+// any broker, without relying on a broker-side in-flight limit.
 type messageQueue struct {
-	mu     sync.Mutex
-	msgs   []message
-	notify chan struct{}
+	mu        sync.Mutex
+	msgs      []message
+	points    int
+	maxPoints int
+	notify    chan struct{}
 }
 
-func newMessageQueue() *messageQueue {
-	return &messageQueue{notify: make(chan struct{}, 1)}
+func newMessageQueue(maxPoints int) *messageQueue {
+	return &messageQueue{maxPoints: maxPoints, notify: make(chan struct{}, 1)}
 }
 
-func (q *messageQueue) push(msg message) {
+// push appends the message to the queue, unless it would exceed the point
+// limit. It returns whether the message was accepted. A single message is
+// always accepted when the queue is empty, so an oversized message can't
+// deadlock the queue.
+func (q *messageQueue) push(msg message) bool {
 	q.mu.Lock()
+
+	if q.points > 0 && q.points+len(msg.samples) > q.maxPoints {
+		q.mu.Unlock()
+
+		return false
+	}
+
 	q.msgs = append(q.msgs, msg)
+	q.points += len(msg.samples)
 	q.mu.Unlock()
 
 	select {
 	case q.notify <- struct{}{}:
 	default:
 	}
+
+	return true
 }
 
 func (q *messageQueue) popAll() []message {
@@ -104,6 +125,7 @@ func (q *messageQueue) popAll() []message {
 
 	msgs := q.msgs
 	q.msgs = nil
+	q.points = 0
 
 	return msgs
 }
@@ -129,7 +151,7 @@ func (b *batch) reset() {
 func NewIngestor(opts Options) (*Ingestor, error) {
 	c := &Ingestor{
 		opts:  opts,
-		queue: newMessageQueue(),
+		queue: newMessageQueue(queueMaxPoints),
 	}
 
 	c.metrics = newMetrics(&c.connected)
@@ -310,7 +332,13 @@ func (c *Ingestor) onMessage(_ paho.Client, m paho.Message) {
 		return
 	}
 
-	c.queue.push(message{samples: samples, ack: m.Ack})
+	if !c.queue.push(message{samples: samples, ack: m.Ack}) {
+		// The queue is full: leave the message unacknowledged so the broker
+		// delivers it again once the writer has caught up.
+		c.metrics.messagesDeferred.Inc()
+
+		return
+	}
 }
 
 // decodeMessage converts an MQTT message to samples. It returns no samples if
