@@ -165,6 +165,14 @@ The pipeline is designed so that a crash or an outage of any component doesn't l
   dropped and counted in `ingestor_points_dropped_total`, so a single malformed payload can
   never block the rest of the ingestion.
 
+## Performance
+
+On a single laptop (everything in Docker, one ingestor), the pipeline sustained 200000 points/s
+with the ingestor below 10% of one core, delivered points end-to-end (MQTT publish to queryable
+in the storage) in 200-500 ms, absorbed a 30 s storage outage without losing a point and drained
+the backlog in a few seconds, and handled 1000 concurrent agent connections without failures.
+The methodology, the load generator and the detailed results are in [bench/](bench/README.md).
+
 ## Setup example
 
 In this example, we are going to setup a Grafana dashboard from metrics sent by two Gloutons over MQTT.
