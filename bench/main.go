@@ -7,8 +7,6 @@
 package main
 
 import (
-	"bytes"
-	"compress/zlib"
 	"context"
 	"encoding/json"
 	"errors"
@@ -28,6 +26,8 @@ import (
 	paho "github.com/eclipse/paho.mqtt.golang"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+
+	"github.com/bleemeo/squirreldb-ingestor/internal/payload"
 )
 
 const (
@@ -40,7 +40,10 @@ const (
 	probeTimeout    = 30 * time.Second
 )
 
-var errProbeTimeout = errors.New("the probe was not queryable before the timeout")
+var (
+	errProbeTimeout   = errors.New("the probe was not queryable before the timeout")
+	errPublishTimeout = errors.New("publish timeout")
+)
 
 // Options of the load generator.
 type Options struct {
@@ -52,12 +55,6 @@ type Options struct {
 	Interval  time.Duration `arg:"--interval"                              default:"10s"`
 	Duration  time.Duration `arg:"--duration"                              default:"60s"`
 	QueryURL  string        `arg:"--query-url"                             help:"Prometheus URL, enables latency probes"`
-}
-
-type metricPayload struct {
-	LabelsText  string  `json:"labels_text"`
-	TimestampMS int64   `json:"time_ms"`
-	Value       float64 `json:"value"`
 }
 
 func main() {
@@ -89,6 +86,13 @@ func main() {
 	start := time.Now()
 
 	for i := range opts.Agents {
+		// Stop the ramp on cancellation: falling through would spawn all
+		// the remaining agents at once, the very connection storm the
+		// stagger delay exists to avoid.
+		if ctx.Err() != nil {
+			break
+		}
+
 		wg.Go(func() {
 			if err := runAgent(ctx, opts, i, &published); err != nil {
 				failedAgents.Add(1)
@@ -147,6 +151,10 @@ func newClient(opts Options, clientID string) (paho.Client, error) {
 // runAgent simulates one Glouton: it publishes a batch of points at a fixed
 // interval on its own topic, like a real agent does.
 func runAgent(ctx context.Context, opts Options, id int, published *atomic.Int64) error {
+	if ctx.Err() != nil {
+		return nil
+	}
+
 	client, err := newClient(opts, "bench-"+strconv.Itoa(id))
 	if err != nil {
 		return err
@@ -154,7 +162,7 @@ func runAgent(ctx context.Context, opts Options, id int, published *atomic.Int64
 
 	defer client.Disconnect(100)
 
-	metrics := make([]metricPayload, opts.Points)
+	metrics := make([]payload.Metric, opts.Points)
 	for k := range metrics {
 		metrics[k].LabelsText = fmt.Sprintf(`__name__="bench_metric",bench_idx="%d"`, k)
 	}
@@ -177,12 +185,12 @@ func runAgent(ctx context.Context, opts Options, id int, published *atomic.Int64
 			metrics[k].Value = float64(now.Unix())
 		}
 
-		payload, err := compress(metrics)
+		data, err := payload.Encode(metrics)
 		if err != nil {
-			return err
+			return fmt.Errorf("encode payload: %w", err)
 		}
 
-		token := client.Publish(topic, 1, false, payload)
+		token := client.Publish(topic, 1, false, data)
 		if !token.WaitTimeout(publishTimeout) {
 			return fmt.Errorf("%s: publish timeout", topic) //nolint:err113
 		}
@@ -193,27 +201,6 @@ func runAgent(ctx context.Context, opts Options, id int, published *atomic.Int64
 
 		published.Add(int64(len(metrics)))
 	}
-}
-
-func compress(metrics []metricPayload) ([]byte, error) {
-	data, err := json.Marshal(metrics)
-	if err != nil {
-		return nil, fmt.Errorf("marshal: %w", err)
-	}
-
-	var buf bytes.Buffer
-
-	writer := zlib.NewWriter(&buf)
-
-	if _, err := writer.Write(data); err != nil {
-		return nil, fmt.Errorf("compress: %w", err)
-	}
-
-	if err := writer.Close(); err != nil {
-		return nil, fmt.Errorf("close zlib writer: %w", err)
-	}
-
-	return buf.Bytes(), nil
 }
 
 // runProbes measures the end-to-end latency: it publishes a probe point with
@@ -255,19 +242,23 @@ func runProbes(ctx context.Context, opts Options) []time.Duration {
 }
 
 func probeOnce(ctx context.Context, opts Options, client paho.Client, seq int) (time.Duration, error) {
-	payload, err := compress([]metricPayload{{
+	data, err := payload.Encode([]payload.Metric{{
 		LabelsText:  `__name__="bench_probe"`,
 		TimestampMS: time.Now().UnixMilli(),
 		Value:       float64(seq),
 	}})
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("encode probe: %w", err)
 	}
 
 	start := time.Now()
 
-	token := client.Publish("v1/agent/bench-probe/data", 1, false, payload)
-	if !token.WaitTimeout(publishTimeout) || token.Error() != nil {
+	token := client.Publish("v1/agent/bench-probe/data", 1, false, data)
+	if !token.WaitTimeout(publishTimeout) {
+		return 0, fmt.Errorf("publish probe: %w", errPublishTimeout)
+	}
+
+	if token.Error() != nil {
 		return 0, fmt.Errorf("publish probe: %w", token.Error())
 	}
 

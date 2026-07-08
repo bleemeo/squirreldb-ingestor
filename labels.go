@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 var errInvalidLabels = errors.New("invalid labels")
@@ -100,6 +101,15 @@ func parseQuotedValue(text string) (string, string, error) {
 		return "", "", fmt.Errorf("%w: unquote value near '%s': %w", errInvalidLabels, text, err)
 	}
 
+	// Reject invalid UTF-8 instead of letting it through: protobuf string
+	// fields must be valid UTF-8, so a single bad value would make the
+	// storage reject the whole write request. This catches both escapes
+	// producing raw bytes (\xff) and raw invalid bytes in the input, which
+	// strconv.Unquote silently replaces with U+FFFD.
+	if !utf8.ValidString(value) || !utf8.ValidString(text[:end+1]) {
+		return "", "", fmt.Errorf("%w: invalid UTF-8 in value near '%s'", errInvalidLabels, text)
+	}
+
 	return value, text[end+1:], nil
 }
 
@@ -136,7 +146,18 @@ func sortLabels(lbls []promLabel) []promLabel {
 }
 
 // setInstance returns the labels with the "instance" label set to the given
-// value, replacing the existing one if any.
+// value, replacing the existing one if any. The labels must be sorted, as
+// returned by parseLabelsText, and stay sorted.
 func setInstance(lbls []promLabel, instance string) []promLabel {
-	return sortLabels(append(lbls, promLabel{name: "instance", value: instance}))
+	index, found := slices.BinarySearchFunc(lbls, "instance", func(label promLabel, name string) int {
+		return strings.Compare(label.name, name)
+	})
+
+	if found {
+		lbls[index].value = instance
+
+		return lbls
+	}
+
+	return slices.Insert(lbls, index, promLabel{name: "instance", value: instance})
 }

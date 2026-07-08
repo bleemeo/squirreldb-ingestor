@@ -1,23 +1,13 @@
 package main
 
 import (
-	"bytes"
-	"compress/zlib"
+	"encoding/binary"
 	"reflect"
 	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
-
-func zlibPayload(data string) []byte {
-	var buf bytes.Buffer
-
-	writer := zlib.NewWriter(&buf)
-	_, _ = writer.Write([]byte(data))
-	_ = writer.Close()
-
-	return buf.Bytes()
-}
 
 func FuzzParseLabelsText(f *testing.F) {
 	seeds := []string{
@@ -32,6 +22,7 @@ func FuzzParseLabelsText(f *testing.F) {
 		`a="\`,
 		"name=\"\xff\xfe\"",
 		`a="\x41",b="é",c="\777"`,
+		`bad="\xff"`,
 	}
 
 	for _, seed := range seeds {
@@ -48,10 +39,15 @@ func FuzzParseLabelsText(f *testing.F) {
 			return
 		}
 
-		// The labels must be sorted by name, without duplicated names.
-		for i := 1; i < len(lbls); i++ {
-			if lbls[i-1].name >= lbls[i].name {
+		for i, label := range lbls {
+			// The labels must be sorted by name, without duplicated names.
+			if i > 0 && lbls[i-1].name >= label.name {
 				t.Errorf("parseLabelsText(%q) = %v is not sorted", text, lbls)
+			}
+
+			// The values feed protobuf string fields, which must be valid UTF-8.
+			if !utf8.ValidString(label.value) {
+				t.Errorf("parseLabelsText(%q) accepted the invalid UTF-8 value %q", text, label.value)
 			}
 		}
 
@@ -81,22 +77,6 @@ func FuzzParseLabelsText(f *testing.F) {
 	})
 }
 
-func FuzzDecode(f *testing.F) {
-	f.Add([]byte("not zlib at all"))
-	f.Add([]byte{0x78, 0x9c})
-	f.Add(zlibPayload(`[]`))
-	f.Add(zlibPayload(`[{"labels_text":"__name__=\"up\"","time_ms":1600000000000,"value":42.5}]`))
-	f.Add(zlibPayload(`[{"labels_text":`))
-	f.Add(zlibPayload(`[] trailing garbage`))
-
-	f.Fuzz(func(_ *testing.T, payload []byte) {
-		var metrics []metricPayload
-
-		// The decoding must never panic, whatever the payload is.
-		_ = decode(payload, &metrics)
-	})
-}
-
 func FuzzMarshalWriteRequest(f *testing.F) {
 	f.Add("__name__", "up", 1.0, int64(1600000000000))
 	f.Add("", "", 0.0, int64(0))
@@ -110,16 +90,17 @@ func FuzzMarshalWriteRequest(f *testing.F) {
 			timestampMS: ts,
 		}}
 
-		buf := marshalWriteRequest(nil, samples)
+		buf, _ := marshalWriteRequest(nil, nil, samples)
 
-		// The encoded length must match the sizes computed by the encoder:
-		// a mismatch would produce a length prefix inconsistent with the
-		// actual content, and the storage would fail to decode the request.
-		tsSize := timeSeriesSize(samples[0])
+		// The length prefix must be consistent with the encoded content:
+		// a mismatch would make the storage fail to decode the request.
+		if len(buf) == 0 || buf[0] != tagWriteRequestTimeseries {
+			t.Fatalf("marshalWriteRequest() = %x, want a TimeSeries frame", buf)
+		}
 
-		wantSize := 1 + varintSize(tsSize) + tsSize
-		if uint64(len(buf)) != wantSize {
-			t.Errorf("marshalWriteRequest() encoded %d bytes, want %d", len(buf), wantSize)
+		size, n := binary.Uvarint(buf[1:])
+		if n <= 0 || uint64(len(buf)) != 1+uint64(n)+size {
+			t.Errorf("Length prefix %d inconsistent with the %d encoded bytes", size, len(buf))
 		}
 	})
 }

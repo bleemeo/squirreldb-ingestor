@@ -1,24 +1,22 @@
 package main
 
 import (
-	"bytes"
-	"compress/zlib"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"math/rand/v2"
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	paho "github.com/eclipse/paho.mqtt.golang"
 
+	"github.com/bleemeo/squirreldb-ingestor/internal/payload"
 	"github.com/rs/zerolog/log"
 )
 
@@ -36,10 +34,6 @@ const (
 	batchMaxPoints = 10000
 	// Maximum delay before pending points are written to the remote storage.
 	batchFlushInterval = time.Second
-	// Number of decoded MQTT messages that can be queued waiting to be
-	// written. When the queue is full the MQTT client stops consuming
-	// messages and the broker buffers them.
-	messageQueueSize = 64
 	// Timeout of the last write attempt during shutdown.
 	finalFlushTimeout = 5 * time.Second
 	// Time given to the MQTT client to disconnect cleanly, in ms.
@@ -47,15 +41,16 @@ const (
 	// Maximum decompressed size of an MQTT payload, to reject decompression
 	// bombs. Real messages are well under 1 MB.
 	maxDecompressedSize = 10 << 20
+	// Prefix of the MQTT topics the agents publish their metrics on.
+	dataTopicPrefix = "v1/agent"
 )
 
 var (
-	errParseFQDN       = errors.New("could not parse FQDN")
-	errNotPem          = errors.New("not a PEM file")
-	errPayloadTooLarge = errors.New("decompressed payload too large")
+	errParseFQDN = errors.New("could not parse FQDN")
+	errNotPem    = errors.New("not a PEM file")
 )
 
-var dataTopicRegex = regexp.MustCompile("^v1/agent/(.*)/data")
+var dataTopicRegex = regexp.MustCompile("^" + dataTopicPrefix + "/(.*)/data")
 
 // Ingestor reads metrics from MQTT and writes them to a remote storage.
 type Ingestor struct {
@@ -64,11 +59,8 @@ type Ingestor struct {
 	opts      Options
 	metrics   *metrics
 	connected atomic.Bool
-	// messages holds the decoded MQTT messages waiting to be written.
-	messages chan message
-	// It's bad practice to store a context in a struct,
-	// but we need to use it in paho callbacks.
-	ctx context.Context //nolint:containedctx
+	// queue holds the decoded MQTT messages waiting to be written.
+	queue *messageQueue
 }
 
 // message holds the points decoded from one MQTT message and the callback
@@ -78,41 +70,69 @@ type message struct {
 	ack     func()
 }
 
-// batch accumulates the points of several MQTT messages before writing them
-// to the remote storage in a single request.
+// messageQueue is an unbounded queue of decoded messages. The MQTT handler
+// must never block: a blocked handler stalls the paho routing goroutine,
+// which also processes the keepalive responses, and the connection would
+// flap during storage outages. Flow control comes from the broker instead:
+// messages are acknowledged only once written, and the broker stops
+// delivering after its in-flight window of unacknowledged messages, which
+// bounds the queue memory.
+type messageQueue struct {
+	mu     sync.Mutex
+	msgs   []message
+	notify chan struct{}
+}
+
+func newMessageQueue() *messageQueue {
+	return &messageQueue{notify: make(chan struct{}, 1)}
+}
+
+func (q *messageQueue) push(msg message) {
+	q.mu.Lock()
+	q.msgs = append(q.msgs, msg)
+	q.mu.Unlock()
+
+	select {
+	case q.notify <- struct{}{}:
+	default:
+	}
+}
+
+func (q *messageQueue) popAll() []message {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	msgs := q.msgs
+	q.msgs = nil
+
+	return msgs
+}
+
+// batch accumulates messages until their points are written to the remote
+// storage in a single request.
 type batch struct {
-	samples []sample
-	acks    []func()
+	messages []message
+	points   int
 }
 
 func (b *batch) add(msg message) {
-	b.samples = append(b.samples, msg.samples...)
-	b.acks = append(b.acks, msg.ack)
+	b.messages = append(b.messages, msg)
+	b.points += len(msg.samples)
 }
 
-// done acknowledges all the messages of the batch and empties it.
-func (b *batch) done() {
-	for _, ack := range b.acks {
-		ack()
-	}
-
-	b.samples = b.samples[:0]
-	b.acks = b.acks[:0]
-}
-
-type metricPayload struct {
-	LabelsText  string  `json:"labels_text"`
-	TimestampMS int64   `json:"time_ms"`
-	Value       float64 `json:"value"`
+func (b *batch) reset() {
+	b.messages = b.messages[:0]
+	b.points = 0
 }
 
 // NewIngestor returns a new initialized ingestor.
 func NewIngestor(opts Options) (*Ingestor, error) {
 	c := &Ingestor{
-		opts:     opts,
-		metrics:  newMetrics(),
-		messages: make(chan message, messageQueueSize),
+		opts:  opts,
+		queue: newMessageQueue(),
 	}
+
+	c.metrics = newMetrics(&c.connected)
 
 	writer, err := NewWriter(opts, c.metrics)
 	if err != nil {
@@ -176,10 +196,24 @@ func loadRootCAs(caFile string) (*x509.CertPool, error) {
 	return rootCAs, nil
 }
 
+// topic returns the MQTT topic filter the ingestor listens on.
+func (c *Ingestor) topic() string {
+	topic := dataTopicPrefix + "/+/data"
+	if c.opts.MQTTID != "" {
+		topic += "/" + c.opts.MQTTID
+	}
+
+	return topic
+}
+
 // Run starts receiving metrics from MQTT and writing them to the remote
 // storage, until the context is canceled.
 func (c *Ingestor) Run(ctx context.Context) {
-	c.ctx = ctx
+	// Register the message handler before connecting: with a persistent
+	// session, the broker can redeliver unacknowledged messages right
+	// after the connection is established, before the subscription call
+	// of onConnect registers the route.
+	c.client.AddRoute(c.topic(), c.onMessage)
 
 	go c.runHTTPServer(ctx)
 
@@ -195,9 +229,12 @@ func (c *Ingestor) Run(ctx context.Context) {
 
 	<-ctx.Done()
 
-	c.client.Disconnect(mqttDisconnectTimeoutMS)
-
+	// Wait for the writer's final flush before disconnecting: paho
+	// silently drops acknowledgments sent after the disconnection, and
+	// the broker would deliver the already-written messages again.
 	<-writerDone
+
+	c.client.Disconnect(mqttDisconnectTimeoutMS)
 }
 
 func (c *Ingestor) connect(ctx context.Context) {
@@ -243,14 +280,8 @@ func (c *Ingestor) onConnect(_ paho.Client) {
 	log.Info().Msg("MQTT connection established")
 
 	c.connected.Store(true)
-	c.metrics.mqttConnected.Set(1)
 
-	topic := "v1/agent/+/data"
-	if c.opts.MQTTID != "" {
-		topic = fmt.Sprintf("%s/%s", topic, c.opts.MQTTID)
-	}
-
-	token := c.client.Subscribe(topic, 1, c.onMessage)
+	token := c.client.Subscribe(c.topic(), 1, c.onMessage)
 	token.Wait()
 
 	// If there is an error, the client should reconnect so the subscription will be retried.
@@ -261,14 +292,14 @@ func (c *Ingestor) onConnect(_ paho.Client) {
 
 func (c *Ingestor) onConnectionLost(_ paho.Client, err error) {
 	c.connected.Store(false)
-	c.metrics.mqttConnected.Set(0)
 
 	log.Warn().Err(err).Msg("MQTT connection lost")
 }
 
 // onMessage decodes an MQTT message and queues its points for writing. The
 // message is acknowledged immediately if it can't be used, otherwise it will
-// be acknowledged once its points have been written.
+// be acknowledged once its points have been written. It never blocks: it
+// runs on the paho routing goroutine.
 func (c *Ingestor) onMessage(_ paho.Client, m paho.Message) {
 	c.metrics.messagesReceived.Inc()
 
@@ -279,10 +310,7 @@ func (c *Ingestor) onMessage(_ paho.Client, m paho.Message) {
 		return
 	}
 
-	select {
-	case c.messages <- message{samples: samples, ack: m.Ack}:
-	case <-c.ctx.Done():
-	}
+	c.queue.push(message{samples: samples, ack: m.Ack})
 }
 
 // decodeMessage converts an MQTT message to samples. It returns no samples if
@@ -291,17 +319,15 @@ func (c *Ingestor) decodeMessage(m paho.Message) []sample {
 	fqdn, err := fqdnFromTopic(m.Topic())
 	if err != nil {
 		log.Warn().Err(err).Msg("Skip message received on an unexpected topic")
-		c.metrics.messagesDropped.WithLabelValues(dropReasonTopic).Inc()
+		c.metrics.messagesDroppedTopic.Inc()
 
 		return nil
 	}
 
-	// Decode the zlib encoded JSON payload.
-	var metrics []metricPayload
-
-	if err := decode(m.Payload(), &metrics); err != nil {
+	metrics, err := payload.Decode(m.Payload(), maxDecompressedSize)
+	if err != nil {
 		log.Warn().Err(err).Msg("Failed to decode payload")
-		c.metrics.messagesDropped.WithLabelValues(dropReasonDecode).Inc()
+		c.metrics.messagesDroppedDecode.Inc()
 
 		return nil
 	}
@@ -318,7 +344,7 @@ func (c *Ingestor) decodeMessage(m paho.Message) []sample {
 			// Skip the point: sending it without labels would make the
 			// remote storage reject the whole write request.
 			log.Warn().Err(err).Msgf("Skip point with invalid labels '%s'", metric.LabelsText)
-			c.metrics.pointsDropped.WithLabelValues(dropReasonLabels).Inc()
+			c.metrics.pointsDroppedLabels.Inc()
 
 			continue
 		}
@@ -345,11 +371,14 @@ func (c *Ingestor) runWriter(ctx context.Context) {
 
 	for {
 		select {
-		case msg := <-c.messages:
-			pending.add(msg)
+		case <-c.queue.notify:
+			for _, msg := range c.queue.popAll() {
+				pending.add(msg)
 
-			if len(pending.samples) >= batchMaxPoints {
-				c.flush(ctx, pending)
+				if pending.points >= batchMaxPoints {
+					c.flush(ctx, pending)
+					ticker.Reset(batchFlushInterval)
+				}
 			}
 		case <-ticker.C:
 			c.flush(ctx, pending)
@@ -361,16 +390,101 @@ func (c *Ingestor) runWriter(ctx context.Context) {
 	}
 }
 
-// flush writes the batch to the remote storage, retrying as long as the error
-// is recoverable. The messages of the batch are acknowledged on success, and
-// also when the remote storage definitively rejected the points: retrying a
-// rejected request would fail forever and block the ingestion.
+// flush writes the batch to the remote storage, retrying as long as the
+// error is recoverable. When the storage definitively rejects the content,
+// the batch is bisected to isolate the offending messages: only their points
+// are dropped (and their messages acknowledged, so they are not delivered
+// again), the others are written normally. If the context is canceled during
+// a retry, the messages not yet written are kept for the final flush.
 func (c *Ingestor) flush(ctx context.Context, pending *batch) {
-	if len(pending.samples) == 0 {
+	if pending.points == 0 {
 		return
 	}
 
-	err := c.writer.Write(ctx, pending.samples)
+	// Segments of messages to write, in order, so the points of a series
+	// stay ordered even while bisecting.
+	segments := [][]message{pending.messages}
+
+	for len(segments) > 0 {
+		segment := segments[0]
+
+		err := c.writeWithRetry(ctx, segment)
+
+		switch {
+		case err == nil:
+			c.completeSegment(segment)
+
+			segments = segments[1:]
+		case isRecoverable(err):
+			// The context was canceled during a retry: keep the messages
+			// not written yet for the final flush.
+			pending.reset()
+
+			for _, segment := range segments {
+				for _, msg := range segment {
+					pending.add(msg)
+				}
+			}
+
+			return
+		case len(segment) == 1:
+			c.dropRejected(segment[0], err)
+
+			segments = segments[1:]
+		default:
+			// The storage rejected the segment: bisect it to isolate the
+			// offending messages.
+			half := len(segment) / 2
+			segments = append([][]message{segment[:half], segment[half:]}, segments[1:]...)
+		}
+	}
+
+	pending.reset()
+}
+
+// completeSegment acknowledges the messages of a successfully written segment.
+func (c *Ingestor) completeSegment(segment []message) {
+	points := 0
+
+	for _, msg := range segment {
+		points += len(msg.samples)
+		msg.ack()
+	}
+
+	c.metrics.pointsWritten.Add(float64(points))
+}
+
+// dropRejected drops a message definitively rejected by the remote storage.
+// The message is acknowledged: retrying it would fail forever, and leaving
+// it unacknowledged would make the broker deliver it again.
+func (c *Ingestor) dropRejected(msg message, err error) {
+	instance := ""
+	if len(msg.samples) > 0 {
+		instance = instanceLabel(msg.samples[0].labels)
+	}
+
+	log.Error().Err(err).Msgf(
+		"The remote storage rejected %d points from instance '%s', dropping them", len(msg.samples), instance,
+	)
+	c.metrics.pointsDroppedRejected.Add(float64(len(msg.samples)))
+
+	msg.ack()
+}
+
+// writeWithRetry writes the samples of the messages, retrying as long as the
+// error is recoverable and the context is not canceled.
+func (c *Ingestor) writeWithRetry(ctx context.Context, msgs []message) error {
+	points := 0
+	for _, msg := range msgs {
+		points += len(msg.samples)
+	}
+
+	samples := make([]sample, 0, points)
+	for _, msg := range msgs {
+		samples = append(samples, msg.samples...)
+	}
+
+	err := c.writer.Write(ctx, samples)
 
 	for attempt := 0; err != nil && isRecoverable(err) && ctx.Err() == nil; attempt++ {
 		delay := retryDelay(err, attempt)
@@ -380,28 +494,16 @@ func (c *Ingestor) flush(ctx context.Context, pending *batch) {
 		select {
 		case <-time.After(delay):
 		case <-ctx.Done():
-			// Keep the batch, the final flush will make a last attempt.
-			return
+			return err
 		}
 
-		err = c.writer.Write(ctx, pending.samples)
+		err = c.writer.Write(ctx, samples)
 		if err == nil {
 			log.Info().Msg("Writing to remote storage recovered, resuming normal operation")
 		}
 	}
 
-	switch {
-	case err == nil:
-		c.metrics.pointsWritten.Add(float64(len(pending.samples)))
-		pending.done()
-	case isRecoverable(err):
-		// The context was canceled during a retry, keep the batch for the
-		// final flush.
-	default:
-		log.Error().Err(err).Msgf("The remote storage rejected %d points, dropping them", len(pending.samples))
-		c.metrics.pointsDropped.WithLabelValues(dropReasonRejected).Add(float64(len(pending.samples)))
-		pending.done()
-	}
+	return err
 }
 
 // retryDelay returns the delay before the given write retry attempt. It
@@ -409,8 +511,8 @@ func (c *Ingestor) flush(ctx context.Context, pending *batch) {
 // grows exponentially with jitter to avoid synchronized retries when several
 // ingestors are running.
 func retryDelay(err error, attempt int) time.Duration {
-	if delay := retryAfterDelay(err); delay > 0 {
-		return min(delay, retryAfterMaxDelay).Round(time.Millisecond)
+	if recoverable, ok := asRecoverable(err); ok && recoverable.retryAfter > 0 {
+		return min(recoverable.retryAfter, retryAfterMaxDelay).Round(time.Millisecond)
 	}
 
 	const maxShift = 10 // Avoid a delay overflow with high attempt counts.
@@ -427,33 +529,44 @@ func retryDelay(err error, attempt int) time.Duration {
 // next start.
 func (c *Ingestor) finalFlush(ctx context.Context, pending *batch) {
 	// Collect the messages that were already queued.
-	for drained := false; !drained; {
-		select {
-		case msg := <-c.messages:
-			pending.add(msg)
-		default:
-			drained = true
-		}
+	for _, msg := range c.queue.popAll() {
+		pending.add(msg)
 	}
 
-	if len(pending.samples) == 0 {
+	if pending.points == 0 {
 		return
 	}
 
 	flushCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), finalFlushTimeout)
 	defer cancel()
 
-	if err := c.writer.Write(flushCtx, pending.samples); err != nil {
+	samples := make([]sample, 0, pending.points)
+	for _, msg := range pending.messages {
+		samples = append(samples, msg.samples...)
+	}
+
+	if err := c.writer.Write(flushCtx, samples); err != nil {
 		log.Warn().Err(err).Msgf(
 			"Failed to write %d points before shutdown, they will be delivered again on the next start",
-			len(pending.samples),
+			pending.points,
 		)
 
 		return
 	}
 
-	c.metrics.pointsWritten.Add(float64(len(pending.samples)))
-	pending.done()
+	c.completeSegment(pending.messages)
+	pending.reset()
+}
+
+// instanceLabel returns the value of the "instance" label, if any.
+func instanceLabel(lbls []promLabel) string {
+	for _, label := range lbls {
+		if label.name == "instance" {
+			return label.value
+		}
+	}
+
+	return ""
 }
 
 // Get the server FQDN from the MQTT topic.
@@ -470,36 +583,4 @@ func fqdnFromTopic(topic string) (string, error) {
 	}
 
 	return "", fmt.Errorf("topic %s: %w", topic, errParseFQDN)
-}
-
-// Decode a zlib compressed JSON payload.
-func decode(input []byte, obj any) error {
-	decoder, err := zlib.NewReader(bytes.NewReader(input))
-	if err != nil {
-		return fmt.Errorf("zlib reader: %w", err)
-	}
-
-	// Bound the decompressed size: without it, a small crafted payload
-	// could expand to gigabytes and take the ingestor down.
-	limited := &io.LimitedReader{R: decoder, N: maxDecompressedSize + 1}
-
-	err = json.NewDecoder(limited).Decode(obj)
-	if err != nil {
-		return fmt.Errorf("decode JSON: %w", err)
-	}
-
-	_, err = io.Copy(io.Discard, limited)
-	if err != nil {
-		return fmt.Errorf("copy: %w", err)
-	}
-
-	if limited.N <= 0 {
-		return errPayloadTooLarge
-	}
-
-	if err := decoder.Close(); err != nil {
-		return fmt.Errorf("close decoder: %w", err)
-	}
-
-	return nil
 }

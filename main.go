@@ -59,6 +59,12 @@ func main() {
 	// The client ID defaults to the username to keep backward compatibility.
 	if opts.MQTTClientID == "" {
 		opts.MQTTClientID = opts.MQTTUsername
+
+		// Two ingestors of different partitions must not share a client ID:
+		// clients with the same ID disconnect each other.
+		if opts.MQTTID != "" {
+			opts.MQTTClientID += "-" + opts.MQTTID
+		}
 	}
 
 	// Setup logger.

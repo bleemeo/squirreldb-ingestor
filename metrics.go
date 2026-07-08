@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -26,19 +27,22 @@ const (
 	dropReasonRejected = "write_rejected"
 )
 
-// metrics holds the internal metrics exposed on the HTTP endpoint.
+// metrics holds the internal metrics exposed on the HTTP endpoint. The
+// counters incremented on the hot path are resolved once here instead of
+// calling WithLabelValues per point.
 type metrics struct {
-	registry         *prometheus.Registry
-	messagesReceived prometheus.Counter
-	messagesDropped  *prometheus.CounterVec
-	pointsReceived   prometheus.Counter
-	pointsWritten    prometheus.Counter
-	pointsDropped    *prometheus.CounterVec
-	writeDuration    prometheus.Histogram
-	mqttConnected    prometheus.Gauge
+	registry              *prometheus.Registry
+	messagesReceived      prometheus.Counter
+	messagesDroppedTopic  prometheus.Counter
+	messagesDroppedDecode prometheus.Counter
+	pointsReceived        prometheus.Counter
+	pointsWritten         prometheus.Counter
+	pointsDroppedLabels   prometheus.Counter
+	pointsDroppedRejected prometheus.Counter
+	writeDuration         prometheus.Histogram
 }
 
-func newMetrics() *metrics {
+func newMetrics(connected *atomic.Bool) *metrics {
 	registry := prometheus.NewRegistry()
 	factory := promauto.With(registry)
 
@@ -47,16 +51,35 @@ func newMetrics() *metrics {
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)
 
+	factory.NewGaugeFunc(prometheus.GaugeOpts{
+		Name: "ingestor_mqtt_connected",
+		Help: "Whether the MQTT connection is currently established.",
+	}, func() float64 {
+		if connected.Load() {
+			return 1
+		}
+
+		return 0
+	})
+
+	messagesDropped := factory.NewCounterVec(prometheus.CounterOpts{
+		Name: "ingestor_mqtt_messages_dropped_total",
+		Help: "Total number of MQTT messages dropped because they could not be processed.",
+	}, []string{"reason"})
+
+	pointsDropped := factory.NewCounterVec(prometheus.CounterOpts{
+		Name: "ingestor_points_dropped_total",
+		Help: "Total number of points dropped because they could not be written.",
+	}, []string{"reason"})
+
 	return &metrics{
 		registry: registry,
 		messagesReceived: factory.NewCounter(prometheus.CounterOpts{
 			Name: "ingestor_mqtt_messages_received_total",
 			Help: "Total number of messages received over MQTT.",
 		}),
-		messagesDropped: factory.NewCounterVec(prometheus.CounterOpts{
-			Name: "ingestor_mqtt_messages_dropped_total",
-			Help: "Total number of MQTT messages dropped because they could not be processed.",
-		}, []string{"reason"}),
+		messagesDroppedTopic:  messagesDropped.WithLabelValues(dropReasonTopic),
+		messagesDroppedDecode: messagesDropped.WithLabelValues(dropReasonDecode),
 		pointsReceived: factory.NewCounter(prometheus.CounterOpts{
 			Name: "ingestor_points_received_total",
 			Help: "Total number of points received over MQTT.",
@@ -65,18 +88,12 @@ func newMetrics() *metrics {
 			Name: "ingestor_points_written_total",
 			Help: "Total number of points successfully written to the remote storage.",
 		}),
-		pointsDropped: factory.NewCounterVec(prometheus.CounterOpts{
-			Name: "ingestor_points_dropped_total",
-			Help: "Total number of points dropped because they could not be written.",
-		}, []string{"reason"}),
+		pointsDroppedLabels:   pointsDropped.WithLabelValues(dropReasonLabels),
+		pointsDroppedRejected: pointsDropped.WithLabelValues(dropReasonRejected),
 		writeDuration: factory.NewHistogram(prometheus.HistogramOpts{
 			Name:    "ingestor_write_request_duration_seconds",
 			Help:    "Duration of the requests to the remote write API.",
 			Buckets: prometheus.DefBuckets,
-		}),
-		mqttConnected: factory.NewGauge(prometheus.GaugeOpts{
-			Name: "ingestor_mqtt_connected",
-			Help: "Whether the MQTT connection is currently established.",
 		}),
 	}
 }
@@ -90,7 +107,8 @@ func (c *Ingestor) runHTTPServer(ctx context.Context) {
 
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.HandlerFor(c.metrics.registry, promhttp.HandlerOpts{}))
-	mux.HandleFunc("/healthz", c.handleHealth)
+	mux.HandleFunc("/healthz", handleLiveness)
+	mux.HandleFunc("/readyz", c.handleReadiness)
 
 	server := &http.Server{
 		Addr:              c.opts.HTTPAddress,
@@ -114,9 +132,18 @@ func (c *Ingestor) runHTTPServer(ctx context.Context) {
 	}
 }
 
-// handleHealth implements a health check that reports whether the MQTT
+// handleLiveness implements a liveness probe: it only reports that the
+// process is alive and serving. The state of the MQTT connection — an
+// external dependency — is exposed by the readiness probe instead, so that
+// a broker outage doesn't turn into a pod restart loop.
+func handleLiveness(w http.ResponseWriter, _ *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("ok"))
+}
+
+// handleReadiness implements a readiness probe that reports whether the MQTT
 // connection is established.
-func (c *Ingestor) handleHealth(w http.ResponseWriter, _ *http.Request) {
+func (c *Ingestor) handleReadiness(w http.ResponseWriter, _ *http.Request) {
 	if c.connected.Load() {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))

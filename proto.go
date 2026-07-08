@@ -53,66 +53,47 @@ type sample struct {
 }
 
 // marshalWriteRequest encodes the samples as a remote write WriteRequest.
-// The buffer is reused if it is big enough.
-func marshalWriteRequest(buf []byte, samples []sample) []byte {
+// Each TimeSeries is encoded once into the scratch buffer, then copied
+// behind its length prefix. Both buffers are reused when big enough, and
+// returned so the caller can keep them for the next call.
+func marshalWriteRequest(buf, scratch []byte, samples []sample) (newBuf, newScratch []byte) {
 	buf = buf[:0]
 
 	for _, s := range samples {
+		scratch = appendTimeSeries(scratch[:0], s)
+
 		buf = append(buf, tagWriteRequestTimeseries)
-		buf = appendVarint(buf, timeSeriesSize(s))
-		buf = appendTimeSeries(buf, s)
+		buf = binary.AppendUvarint(buf, uint64(len(scratch)))
+		buf = append(buf, scratch...)
 	}
 
-	return buf
+	return buf, scratch
 }
 
 func appendTimeSeries(buf []byte, s sample) []byte {
 	for _, label := range s.labels {
 		buf = append(buf, tagTimeSeriesLabels)
-		buf = appendVarint(buf, labelSize(label))
+		buf = binary.AppendUvarint(buf, labelSize(label))
 		buf = appendString(buf, tagLabelName, label.name)
 		buf = appendString(buf, tagLabelValue, label.value)
 	}
 
 	buf = append(buf, tagTimeSeriesSamples)
-	buf = appendVarint(buf, sampleSize(s))
+	buf = binary.AppendUvarint(buf, sampleSize(s))
 	buf = append(buf, tagSampleValue)
 	buf = binary.LittleEndian.AppendUint64(buf, math.Float64bits(s.value))
 	buf = append(buf, tagSampleTimestamp)
 	// Negative timestamps are encoded as two's complement, like protobuf does.
-	buf = appendVarint(buf, uint64(s.timestampMS)) //nolint:gosec
+	buf = binary.AppendUvarint(buf, uint64(s.timestampMS)) //nolint:gosec
 
 	return buf
 }
 
 func appendString(buf []byte, tag byte, s string) []byte {
 	buf = append(buf, tag)
-	buf = appendVarint(buf, uint64(len(s)))
+	buf = binary.AppendUvarint(buf, uint64(len(s)))
 
 	return append(buf, s...)
-}
-
-func appendVarint(buf []byte, v uint64) []byte {
-	for v >= 0x80 {
-		buf = append(buf, byte(v)|0x80)
-		v >>= 7
-	}
-
-	return append(buf, byte(v))
-}
-
-func timeSeriesSize(s sample) uint64 {
-	size := uint64(0)
-
-	for _, label := range s.labels {
-		lSize := labelSize(label)
-		size += 1 + varintSize(lSize) + lSize
-	}
-
-	sSize := sampleSize(s)
-	size += 1 + varintSize(sSize) + sSize
-
-	return size
 }
 
 func labelSize(label promLabel) uint64 {

@@ -1,18 +1,16 @@
 package main
 
 import (
-	"bytes"
-	"compress/zlib"
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/bleemeo/squirreldb-ingestor/internal/payload"
 )
 
 // Constants shared by the tests of the package.
@@ -22,6 +20,12 @@ const (
 	testItemLabel       = "item"
 	testFQDN            = "server1.example.com"
 )
+
+// testMetrics returns metrics suitable for tests: each call uses its own
+// registry, so parallel tests don't collide.
+func testMetrics() *metrics {
+	return newMetrics(new(atomic.Bool))
+}
 
 func TestFQDNFromTopic(t *testing.T) {
 	t.Parallel()
@@ -79,97 +83,6 @@ func TestFQDNFromTopicInvalid(t *testing.T) {
 	}
 }
 
-func compress(t *testing.T, payload []byte) []byte {
-	t.Helper()
-
-	var buf bytes.Buffer
-
-	writer := zlib.NewWriter(&buf)
-
-	if _, err := writer.Write(payload); err != nil {
-		t.Fatalf("Failed to compress the payload: %v", err)
-	}
-
-	if err := writer.Close(); err != nil {
-		t.Fatalf("Failed to close the zlib writer: %v", err)
-	}
-
-	return buf.Bytes()
-}
-
-func TestDecode(t *testing.T) {
-	t.Parallel()
-
-	want := []metricPayload{
-		{
-			LabelsText:  `__name__="cpu_used_decode"`,
-			TimestampMS: 1600000000000,
-			Value:       42.5,
-		},
-	}
-
-	payload, err := json.Marshal(want)
-	if err != nil {
-		t.Fatalf("Failed to marshal the payload: %v", err)
-	}
-
-	var got []metricPayload
-
-	if err := decode(compress(t, payload), &got); err != nil {
-		t.Fatalf("decode() failed: %v", err)
-	}
-
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("decode() = %v, want %v", got, want)
-	}
-}
-
-func TestDecodeInvalid(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name    string
-		payload []byte
-	}{
-		{name: "not-zlib", payload: []byte("not zlib")},
-		{name: "empty-payload", payload: nil},
-		{name: "not-json", payload: nil}, // The payload is set below.
-	}
-
-	tests[2].payload = compress(t, []byte("not json"))
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-
-			var got []metricPayload
-
-			if err := decode(test.payload, &got); err == nil {
-				t.Errorf("decode(%q) succeeded, want an error", test.payload)
-			}
-		})
-	}
-}
-
-// TestDecodeBomb ensures a payload expanding over the decompressed size limit
-// is rejected instead of exhausting the memory.
-func TestDecodeBomb(t *testing.T) {
-	t.Parallel()
-
-	// A highly compressible 60 MB payload: a few kilobytes compressed.
-	bomb := compress(t, []byte(`[{"labels_text":"`+strings.Repeat("a", 60<<20)+`"}]`))
-
-	if len(bomb) > 1<<20 {
-		t.Fatalf("The compressed bomb is %d bytes, expected it to be small", len(bomb))
-	}
-
-	var got []metricPayload
-
-	if err := decode(bomb, &got); err == nil {
-		t.Error("decode() accepted a decompression bomb, want an error")
-	}
-}
-
 // fakeMessage implements paho.Message for the tests.
 type fakeMessage struct {
 	topic   string
@@ -189,19 +102,18 @@ func TestOnMessage(t *testing.T) {
 	t.Parallel()
 
 	ingestor := &Ingestor{
-		metrics:  newMetrics(),
-		messages: make(chan message, 1),
-		ctx:      t.Context(),
+		metrics: testMetrics(),
+		queue:   newMessageQueue(),
 	}
 
-	payload, err := json.Marshal([]metricPayload{
+	data, err := payload.Encode([]payload.Metric{
 		{LabelsText: `__name__="up",instance="untrusted"`, TimestampMS: 1600000000000, Value: 1},
 	})
 	if err != nil {
-		t.Fatalf("Failed to marshal the payload: %v", err)
+		t.Fatalf("Failed to encode the payload: %v", err)
 	}
 
-	msg := &fakeMessage{topic: "v1/agent/server1,example,com/data", payload: compress(t, payload)}
+	msg := &fakeMessage{topic: "v1/agent/server1,example,com/data", payload: data}
 
 	ingestor.onMessage(nil, msg)
 
@@ -209,12 +121,9 @@ func TestOnMessage(t *testing.T) {
 		t.Error("The message was acknowledged before its points were written")
 	}
 
-	var queued message
-
-	select {
-	case queued = <-ingestor.messages:
-	default:
-		t.Fatal("No message was queued")
+	queued := ingestor.queue.popAll()
+	if len(queued) != 1 {
+		t.Fatalf("Got %d queued messages, want 1", len(queued))
 	}
 
 	want := []promLabel{
@@ -222,11 +131,11 @@ func TestOnMessage(t *testing.T) {
 		{name: testInstanceLabel, value: testFQDN},
 	}
 
-	if len(queued.samples) != 1 || !reflect.DeepEqual(queued.samples[0].labels, want) {
-		t.Errorf("Queued samples = %v, want one sample with labels %v", queued.samples, want)
+	if len(queued[0].samples) != 1 || !reflect.DeepEqual(queued[0].samples[0].labels, want) {
+		t.Errorf("Queued samples = %v, want one sample with labels %v", queued[0].samples, want)
 	}
 
-	queued.ack()
+	queued[0].ack()
 
 	if !msg.acked.Load() {
 		t.Error("The ack callback didn't acknowledge the MQTT message")
@@ -250,9 +159,8 @@ func TestOnMessageInvalid(t *testing.T) {
 			t.Parallel()
 
 			ingestor := &Ingestor{
-				metrics:  newMetrics(),
-				messages: make(chan message, 1),
-				ctx:      t.Context(),
+				metrics: testMetrics(),
+				queue:   newMessageQueue(),
 			}
 
 			msg := &fakeMessage{topic: test.topic, payload: test.payload}
@@ -263,10 +171,8 @@ func TestOnMessageInvalid(t *testing.T) {
 				t.Error("An unusable message must be acknowledged immediately")
 			}
 
-			select {
-			case queued := <-ingestor.messages:
+			if queued := ingestor.queue.popAll(); len(queued) != 0 {
 				t.Errorf("An unusable message was queued: %v", queued)
-			default:
 			}
 		})
 	}
@@ -285,7 +191,7 @@ func TestRunWriterBatchesMessages(t *testing.T) {
 	}))
 	defer server.Close()
 
-	m := newMetrics()
+	m := testMetrics()
 
 	writer, err := NewWriter(Options{RemoteWriteURL: server.URL}, m)
 	if err != nil {
@@ -293,9 +199,9 @@ func TestRunWriterBatchesMessages(t *testing.T) {
 	}
 
 	ingestor := &Ingestor{
-		writer:   writer,
-		metrics:  m,
-		messages: make(chan message, 8),
+		writer:  writer,
+		metrics: m,
+		queue:   newMessageQueue(),
 	}
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -311,9 +217,9 @@ func TestRunWriterBatchesMessages(t *testing.T) {
 
 	var acks atomic.Int64
 
-	ingestor.messages <- message{samples: testSamples(), ack: func() { acks.Add(1) }}
+	ingestor.queue.push(message{samples: testSamples(), ack: func() { acks.Add(1) }})
 
-	ingestor.messages <- message{samples: testSamples(), ack: func() { acks.Add(1) }}
+	ingestor.queue.push(message{samples: testSamples(), ack: func() { acks.Add(1) }})
 
 	// Wait for the periodic flush.
 	deadline := time.Now().Add(5 * time.Second)

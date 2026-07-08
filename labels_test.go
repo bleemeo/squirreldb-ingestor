@@ -94,6 +94,8 @@ func TestParseLabelsTextErrors(t *testing.T) {
 		{name: "missing-comma", text: `a="1" b="2"`},
 		{name: "single-quotes", text: `name='value'`},
 		{name: "trailing-garbage", text: `a="1"; b="2"`},
+		{name: "escaped-invalid-utf8", text: `a="\xff"`},
+		{name: "raw-invalid-utf8", text: "a=\"\xff\xfe\""},
 	}
 
 	for _, test := range tests {

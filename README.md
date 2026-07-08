@@ -115,9 +115,10 @@ The credentials used to authenticate with MQTT. Prefer the environment variable 
 command line argument for the password: command line arguments are visible to the other users
 of the machine.
 
--  `--mqtt-client-id`, env: `INGESTOR_MQTT_CLIENT_ID`, default: the MQTT username  
-The MQTT client ID. Two clients connecting with the same client ID disconnect each other,
-so this option must be set when multiple ingestors share the same username.
+-  `--mqtt-client-id`, env: `INGESTOR_MQTT_CLIENT_ID`, default: the MQTT username, suffixed
+with `-<mqtt-id>` when `--mqtt-id` is set  
+The MQTT client ID. Two clients connecting with the same client ID disconnect each other; the
+default keeps partitioned ingestors distinct even when they share the same username.
 
 -  `--mqtt-ssl-insecure`, env: `INGESTOR_MQTT_SSL_INSECURE`  
 Allow insecure SSL connection.
@@ -135,10 +136,12 @@ to configure the topic this ingestor should listen on. More details are availabl
 
 -  `--http-address`, env: `INGESTOR_HTTP_ADDRESS`, default: 0.0.0.0:8080  
 The address of the HTTP server exposing the ingestor internals. Set it to an empty string to
-disable the HTTP server. Two endpoints are available:
+disable the HTTP server. Three endpoints are available:
    - `/metrics`: the ingestor metrics in the Prometheus format.
-   - `/healthz`: returns HTTP 200 when the MQTT connection is established, and HTTP 503
-     otherwise. It can be used as a liveness or readiness probe.
+   - `/healthz`: liveness probe, returns HTTP 200 as long as the process is serving. It doesn't
+     depend on the MQTT connection, so a broker outage doesn't turn into a restart loop.
+   - `/readyz`: readiness probe, returns HTTP 200 when the MQTT connection is established, and
+     HTTP 503 otherwise.
 
 The following metrics are exposed, along with the standard Go and process collectors:
 
@@ -164,10 +167,14 @@ The pipeline is designed so that a crash or an outage of any component doesn't l
   storages handle the resulting duplicate points gracefully).
 - Failed writes are retried with an exponential backoff (from 1 second up to 1 minute, with
   jitter so that several ingestors don't retry in lockstep), and the `Retry-After` header is
-  honored when the remote storage sends one.
-- Requests definitively rejected by the storage (HTTP 4xx) are not retried: their points are
-  dropped and counted in `ingestor_points_dropped_total`, so a single malformed payload can
-  never block the rest of the ingestion.
+  honored when the remote storage sends one. Configuration errors (401, 403, 404...) are
+  retried too: dropping data would not fix them, so the points stay buffered in the broker
+  until the configuration is repaired.
+- Only requests whose content is definitively rejected by the storage (HTTP 400 or 413) are not
+  retried. The batch is then bisected to isolate the offending message: its points are dropped
+  and counted in `ingestor_points_dropped_total`, and the points of the other agents are
+  written normally — a single malformed payload can neither block nor destroy the rest of the
+  ingestion.
 
 ## Performance
 
@@ -188,6 +195,9 @@ SquirrelDB and Grafana. It provides a NATS cluster with three nodes for high ava
 cd examples/ingestor_ha
 docker compose up -d
 ```
+
+Note that Cassandra takes about a minute to initialize: until it is ready, SquirrelDB restarts
+in a loop and the ingestors retry their writes. Everything settles by itself.
 
 Now you can check that the ingestors are connected to MQTT. The logs should say `MQTT connection established`.
 ```sh
@@ -313,8 +323,8 @@ Note that running multiple ingestors doesn't give you high availability: if one 
 down, the messages of its partition won't be processed until it's restarted. This is not much of
 an issue since the messages are buffered in NATS, so you won't lose any metric. Moreover, the
 ingestor is stateless, so it can be restarted with the same configuration, which might be
-automated by an orchestrator like Kubernetes (the `/healthz` endpoint can serve as the liveness
-probe).
+automated by an orchestrator like Kubernetes (the `/healthz` and `/readyz` endpoints can serve
+as the liveness and readiness probes).
 
 ## Contributing
 

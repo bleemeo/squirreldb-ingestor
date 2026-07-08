@@ -2,49 +2,20 @@ package main
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/hex"
 	"math"
 	"testing"
 )
 
-// readVarint is a reference decoder used to validate appendVarint.
-func readVarint(t *testing.T, buf []byte) (uint64, []byte) {
-	t.Helper()
-
-	var (
-		value uint64
-		shift uint
-	)
-
-	for i, b := range buf {
-		value |= uint64(b&0x7f) << shift
-		shift += 7
-
-		if b < 0x80 {
-			return value, buf[i+1:]
-		}
-	}
-
-	t.Fatal("truncated varint")
-
-	return 0, nil
-}
-
-func TestAppendVarint(t *testing.T) {
+func TestVarintSize(t *testing.T) {
 	t.Parallel()
 
 	values := []uint64{0, 1, 127, 128, 300, 16383, 16384, 1 << 32, 1600000000000, math.MaxUint64}
 
 	for _, value := range values {
-		buf := appendVarint(nil, value)
-
-		if size := varintSize(value); size != uint64(len(buf)) {
-			t.Errorf("varintSize(%d) = %d, want %d", value, size, len(buf))
-		}
-
-		got, rest := readVarint(t, buf)
-		if got != value || len(rest) != 0 {
-			t.Errorf("Decoded varint %d (with %d remaining bytes), want %d", got, len(rest), value)
+		if size, want := varintSize(value), len(binary.AppendUvarint(nil, value)); size != uint64(want) {
+			t.Errorf("varintSize(%d) = %d, want %d", value, size, want)
 		}
 	}
 }
@@ -70,8 +41,8 @@ func TestMarshalWriteRequest(t *testing.T) {
 		"0a0f" + "0a08" + "696e7374616e6365" + "1203" + "737276" + // instance="srv"
 		"120b" + "09" + "000000000000f03f" + "10" + "01" // value=1, timestamp=1
 
-	got := hex.EncodeToString(marshalWriteRequest(nil, samples))
-	if got != want {
+	buf, _ := marshalWriteRequest(nil, nil, samples)
+	if got := hex.EncodeToString(buf); got != want {
 		t.Errorf("marshalWriteRequest() = %s, want %s", got, want)
 	}
 }
@@ -79,12 +50,12 @@ func TestMarshalWriteRequest(t *testing.T) {
 func TestMarshalWriteRequestEmpty(t *testing.T) {
 	t.Parallel()
 
-	if got := marshalWriteRequest(nil, nil); len(got) != 0 {
-		t.Errorf("marshalWriteRequest(nil, nil) = %x, want an empty buffer", got)
+	if got, _ := marshalWriteRequest(nil, nil, nil); len(got) != 0 {
+		t.Errorf("marshalWriteRequest(nil, nil, nil) = %x, want an empty buffer", got)
 	}
 }
 
-func TestMarshalWriteRequestReusesBuffer(t *testing.T) {
+func TestMarshalWriteRequestReusesBuffers(t *testing.T) {
 	t.Parallel()
 
 	samples := []sample{
@@ -100,10 +71,10 @@ func TestMarshalWriteRequestReusesBuffer(t *testing.T) {
 		},
 	}
 
-	first := marshalWriteRequest(nil, samples)
-	second := marshalWriteRequest(make([]byte, 1024), samples)
+	first, scratch := marshalWriteRequest(nil, nil, samples)
+	second, _ := marshalWriteRequest(make([]byte, 1024), scratch, samples)
 
 	if !bytes.Equal(first, second) {
-		t.Errorf("Encoding with a reused buffer gave %x, want %x", second, first)
+		t.Errorf("Encoding with reused buffers gave %x, want %x", second, first)
 	}
 }
