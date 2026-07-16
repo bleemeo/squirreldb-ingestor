@@ -149,7 +149,6 @@ The following metrics are exposed, along with the standard Go and process collec
 |---|---|
 | `ingestor_mqtt_connected` | Whether the MQTT connection is currently established. |
 | `ingestor_mqtt_messages_received_total` | Messages received over MQTT. |
-| `ingestor_mqtt_messages_deferred_total` | Messages left unacknowledged because the queue was full, to be redelivered. |
 | `ingestor_mqtt_messages_dropped_total{reason}` | Messages dropped because they could not be processed. |
 | `ingestor_points_received_total` | Points received over MQTT. |
 | `ingestor_points_written_total` | Points successfully written to the remote storage. |
@@ -166,10 +165,11 @@ The pipeline is designed so that a crash or an outage of any component doesn't l
   stopped or crashes while the storage is down, the unacknowledged messages stay in NATS
   JetStream and are delivered again on the next start (delivery is at-least-once; remote write
   storages handle the resulting duplicate points gracefully).
-- During a storage outage the decoded points are buffered in memory, bounded by an internal
-  limit. Beyond it, messages are left unacknowledged (counted in
-  `ingestor_mqtt_messages_deferred_total`) so the broker keeps them and redelivers them once the
-  writer catches up — the ingestor memory stays bounded regardless of the broker.
+- During a storage outage the decoded points are buffered in memory. The buffer is bounded by
+  the broker's in-flight window for the QoS 1 subscription (the receive-maximum, Mosquitto's
+  `max_inflight_messages`, NATS' `max_ack_pending`): the broker stops delivering once that many
+  messages are unacknowledged, and resumes on its own as the writer acknowledges them after
+  writing. Size that window to cap the ingestor memory.
 - Failed writes are retried with an exponential backoff (from 1 second up to 1 minute, with
   jitter so that several ingestors don't retry in lockstep), and the `Retry-After` header is
   honored when the remote storage sends one. Configuration errors (401, 403, 404...) are

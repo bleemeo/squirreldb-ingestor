@@ -32,10 +32,6 @@ const (
 	retryAfterMaxDelay = 5 * time.Minute
 	// Maximum number of points per write request to the remote storage.
 	batchMaxPoints = 10000
-	// Maximum number of points held in the queue between the MQTT handler
-	// and the writer. Beyond this, messages are left unacknowledged for the
-	// broker to redeliver, bounding the memory during a storage outage.
-	queueMaxPoints = 200000
 	// Maximum delay before pending points are written to the remote storage.
 	batchFlushInterval = time.Second
 	// Timeout of the last write attempt during shutdown.
@@ -77,46 +73,38 @@ type message struct {
 // messageQueue is a queue of decoded messages between the MQTT handler and
 // the writer. The MQTT handler must never block: a blocked handler stalls the
 // paho routing goroutine, which also processes the keepalive responses, and
-// the connection would flap during storage outages. So instead of blocking
-// when full, push rejects the message; the caller then leaves it
-// unacknowledged and the broker delivers it again later. This bounds the
-// queue memory (a decoded message is much larger than the wire payload) for
-// any broker, without relying on a broker-side in-flight limit.
+// the connection would flap during storage outages. So push never blocks; it
+// always appends.
+//
+// Memory during a storage outage is bounded by the broker's in-flight window
+// for the QoS-1 subscription (the receive-maximum, Mosquitto's
+// max_inflight_messages, NATS' max_ack_pending): the broker stops delivering
+// once that many messages are unacknowledged, and resumes on its own as the
+// writer acknowledges them after writing. We do not enforce our own bound:
+// dropping a message would lose its ack callback, so it would never be
+// written and, on brokers that redeliver only on reconnection (e.g.
+// Mosquitto), never delivered again either, while its in-flight slot stays
+// held until the session is recreated.
 type messageQueue struct {
-	mu        sync.Mutex
-	msgs      []message
-	points    int
-	maxPoints int
-	notify    chan struct{}
+	mu     sync.Mutex
+	msgs   []message
+	notify chan struct{}
 }
 
-func newMessageQueue(maxPoints int) *messageQueue {
-	return &messageQueue{maxPoints: maxPoints, notify: make(chan struct{}, 1)}
+func newMessageQueue() *messageQueue {
+	return &messageQueue{notify: make(chan struct{}, 1)}
 }
 
-// push appends the message to the queue, unless it would exceed the point
-// limit. It returns whether the message was accepted. A single message is
-// always accepted when the queue is empty, so an oversized message can't
-// deadlock the queue.
-func (q *messageQueue) push(msg message) bool {
+// push appends the message to the queue. It never blocks.
+func (q *messageQueue) push(msg message) {
 	q.mu.Lock()
-
-	if q.points > 0 && q.points+len(msg.samples) > q.maxPoints {
-		q.mu.Unlock()
-
-		return false
-	}
-
 	q.msgs = append(q.msgs, msg)
-	q.points += len(msg.samples)
 	q.mu.Unlock()
 
 	select {
 	case q.notify <- struct{}{}:
 	default:
 	}
-
-	return true
 }
 
 func (q *messageQueue) popAll() []message {
@@ -125,7 +113,6 @@ func (q *messageQueue) popAll() []message {
 
 	msgs := q.msgs
 	q.msgs = nil
-	q.points = 0
 
 	return msgs
 }
@@ -143,6 +130,10 @@ func (b *batch) add(msg message) {
 }
 
 func (b *batch) reset() {
+	// Clear the whole backing array, not just the live slice: the retained
+	// message structs would otherwise keep their samples and ack closures
+	// (each referencing a paho message) alive until the array is overwritten.
+	clear(b.messages[:cap(b.messages)])
 	b.messages = b.messages[:0]
 	b.points = 0
 }
@@ -151,7 +142,7 @@ func (b *batch) reset() {
 func NewIngestor(opts Options) (*Ingestor, error) {
 	c := &Ingestor{
 		opts:  opts,
-		queue: newMessageQueue(queueMaxPoints),
+		queue: newMessageQueue(),
 	}
 
 	c.metrics = newMetrics(&c.connected)
@@ -332,13 +323,7 @@ func (c *Ingestor) onMessage(_ paho.Client, m paho.Message) {
 		return
 	}
 
-	if !c.queue.push(message{samples: samples, ack: m.Ack}) {
-		// The queue is full: leave the message unacknowledged so the broker
-		// delivers it again once the writer has caught up.
-		c.metrics.messagesDeferred.Inc()
-
-		return
-	}
+	c.queue.push(message{samples: samples, ack: m.Ack})
 }
 
 // decodeMessage converts an MQTT message to samples. It returns no samples if
@@ -445,13 +430,17 @@ func (c *Ingestor) flush(ctx context.Context, pending *batch) {
 			segments = segments[1:]
 		case isRecoverable(err):
 			// The context was canceled during a retry: keep the messages
-			// not written yet for the final flush.
+			// not written yet for the final flush. Collect them first, as the
+			// segments still alias pending's backing array that reset clears.
+			remaining := make([]message, 0, len(segments))
+			for _, segment := range segments {
+				remaining = append(remaining, segment...)
+			}
+
 			pending.reset()
 
-			for _, segment := range segments {
-				for _, msg := range segment {
-					pending.add(msg)
-				}
+			for _, msg := range remaining {
+				pending.add(msg)
 			}
 
 			return

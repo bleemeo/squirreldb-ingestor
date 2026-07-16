@@ -103,7 +103,7 @@ func TestOnMessage(t *testing.T) {
 
 	ingestor := &Ingestor{
 		metrics: testMetrics(),
-		queue:   newMessageQueue(queueMaxPoints),
+		queue:   newMessageQueue(),
 	}
 
 	data, err := payload.Encode([]payload.Metric{
@@ -160,7 +160,7 @@ func TestOnMessageInvalid(t *testing.T) {
 
 			ingestor := &Ingestor{
 				metrics: testMetrics(),
-				queue:   newMessageQueue(queueMaxPoints),
+				queue:   newMessageQueue(),
 			}
 
 			msg := &fakeMessage{topic: test.topic, payload: test.payload}
@@ -175,32 +175,6 @@ func TestOnMessageInvalid(t *testing.T) {
 				t.Errorf("An unusable message was queued: %v", queued)
 			}
 		})
-	}
-}
-
-// TestQueueRejectsWhenFull ensures the queue rejects messages beyond its
-// point limit (but always accepts at least one), so a message left
-// unacknowledged is redelivered instead of growing memory without bound.
-func TestQueueRejectsWhenFull(t *testing.T) {
-	t.Parallel()
-
-	q := newMessageQueue(3)
-
-	twoPoints := message{samples: make([]sample, 2)}
-	if !q.push(twoPoints) {
-		t.Fatal("The first message was rejected, want accepted")
-	}
-
-	// 2 + 2 > 3: rejected.
-	if q.push(twoPoints) {
-		t.Error("A message exceeding the limit was accepted, want rejected")
-	}
-
-	// A single oversized message is accepted on an empty queue.
-	q.popAll()
-
-	if !q.push(message{samples: make([]sample, 10)}) {
-		t.Error("An oversized message was rejected on an empty queue, want accepted")
 	}
 }
 
@@ -227,7 +201,7 @@ func TestRunWriterBatchesMessages(t *testing.T) {
 	ingestor := &Ingestor{
 		writer:  writer,
 		metrics: m,
-		queue:   newMessageQueue(queueMaxPoints),
+		queue:   newMessageQueue(),
 	}
 
 	ctx, cancel := context.WithCancel(t.Context())

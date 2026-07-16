@@ -30,7 +30,7 @@ services:
       - SYS_PTRACE # This permission is needed to monitor processes IO and memory used per process.
       - SYS_ADMIN # This permission is needed to retrieve the network interface names of containers.
 
-  squirreldb-ingestor-1:
+  squirreldb-ingestor-0:
     image: bleemeo/squirreldb-ingestor
     restart: unless-stopped
     environment:
@@ -43,7 +43,7 @@ services:
       # The ingestor metrics and health endpoints.
       - 127.0.0.1:8080:8080
 
-  squirreldb-ingestor-2:
+  squirreldb-ingestor-1:
     image: bleemeo/squirreldb-ingestor
     restart: unless-stopped
     environment:
