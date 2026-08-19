@@ -1,137 +1,262 @@
-// Prometheus remote write client, the code is inspired from
-// https://github.com/prometheus/prometheus/blob/main/storage/remote/queue_manager.go
+// Minimal Prometheus remote write client.
 
 package main
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
 	"time"
 
-	"github.com/gogo/protobuf/proto"
 	"github.com/golang/snappy"
-	"github.com/prometheus/common/config"
-	"github.com/prometheus/common/model"
-	"github.com/prometheus/prometheus/model/labels"
-	"github.com/prometheus/prometheus/prompb"
-	"github.com/prometheus/prometheus/storage/remote"
-	"github.com/rs/zerolog/log"
 )
 
-// The timeout of requests sent to the API.
-const clientTimeout = 10 * time.Second
+const (
+	// The timeout of requests sent to the API.
+	clientTimeout = 10 * time.Second
+	// Maximum size of an error response body included in error messages.
+	maxErrorBodySize = 512
+)
 
-// Writer allows writing to a Prometheus remote write API.
-type Writer struct {
-	client remote.WriteClient
-	buf    []byte
-	pBuf   *proto.Buffer
+var (
+	errInvalidURL    = errors.New("invalid remote write URL")
+	errInvalidAuth   = errors.New("invalid remote write authentication options")
+	errInvalidHeader = errors.New("invalid remote write header")
+	// errRequestRejected reports that the remote storage definitively
+	// rejected the content of the request: retrying it unchanged would
+	// fail forever.
+	errRequestRejected = errors.New("the remote storage rejected the request")
+	errWriteFailed     = errors.New("remote write failed")
+)
+
+// recoverableError wraps an error that is worth retrying: a network failure,
+// a server-side error, throttling, or a configuration error (bad credentials,
+// wrong URL) that dropping data would not fix.
+type recoverableError struct {
+	err error
+	// retryAfter is the delay requested by the server, or 0.
+	retryAfter time.Duration
 }
 
-type sample struct {
-	labels labels.Labels
-	value  float64
-	// Timestamp in ms.
-	timestamp int64
+func (e recoverableError) Error() string {
+	return e.err.Error()
+}
+
+func (e recoverableError) Unwrap() error {
+	return e.err
+}
+
+// asRecoverable returns the recoverable error wrapped in err, if any.
+func asRecoverable(err error) (recoverableError, bool) {
+	var recoverable recoverableError
+
+	ok := errors.As(err, &recoverable)
+
+	return recoverable, ok
+}
+
+// isRecoverable returns whether the write that returned this error can be
+// retried.
+func isRecoverable(err error) bool {
+	_, ok := asRecoverable(err)
+
+	return ok
+}
+
+// Writer allows writing to a Prometheus remote write API.
+// It is not safe for concurrent use.
+type Writer struct {
+	url      string
+	client   *http.Client
+	headers  http.Header
+	metrics  *metrics
+	protoBuf []byte
+	scratch  []byte
 }
 
 // NewWriter returns a new initialized writer.
-func NewWriter(rawURL string) *Writer {
-	u, err := url.Parse(rawURL)
+func NewWriter(opts Options, metrics *metrics) (*Writer, error) {
+	u, err := url.Parse(opts.RemoteWriteURL)
 	if err != nil {
-		log.Fatal().Err(err).Msgf("Failed to parse remote write URL '%s'", rawURL)
+		return nil, fmt.Errorf("parse remote write URL '%s': %w", opts.RemoteWriteURL, err)
 	}
 
-	conf := &remote.ClientConfig{
-		URL:              &config.URL{URL: u},
-		Timeout:          model.Duration(clientTimeout),
-		HTTPClientConfig: config.DefaultHTTPClientConfig,
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return nil, fmt.Errorf("%w: '%s' should begin with http:// or https://", errInvalidURL, opts.RemoteWriteURL)
 	}
 
-	client, err := remote.NewWriteClient("", conf)
+	headers, err := writeRequestHeaders(opts)
 	if err != nil {
-		log.Fatal().Err(err).Msgf("Failed to create remote write client")
+		return nil, err
 	}
 
 	w := &Writer{
-		client: client,
-		pBuf:   proto.NewBuffer(nil),
-		buf:    []byte{},
+		url:     u.String(),
+		client:  &http.Client{Timeout: clientTimeout, Transport: newTransport()},
+		headers: headers,
+		metrics: metrics,
 	}
 
-	return w
+	return w, nil
 }
 
-// Write samples to the configured prometheus remote Write endpoint.
-func (w *Writer) Write(ctx context.Context, samples []sample) error {
-	series := samplesToTimeseries(samples)
-
-	req, err := w.buildWriteRequest(series)
-	if err != nil {
-		return err
+// newTransport returns the transport used for the write requests: the
+// default transport without proxy support, as the storage is expected to be
+// reachable directly even when HTTP_PROXY environment variables are set.
+func newTransport() http.RoundTripper {
+	transport, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return http.DefaultTransport
 	}
 
-	if _, err = w.client.Store(ctx, req, 0); err != nil {
-		return fmt.Errorf("remote write: %w", err)
-	}
+	transport = transport.Clone()
+	transport.Proxy = nil
 
-	return nil
+	return transport
 }
 
-func (w *Writer) buildWriteRequest(samples []prompb.TimeSeries) ([]byte, error) {
-	req := &prompb.WriteRequest{
-		Timeseries: samples,
+// writeRequestHeaders builds the headers sent with the write requests,
+// including the authentication and the user-provided headers.
+func writeRequestHeaders(opts Options) (http.Header, error) {
+	headers := http.Header{}
+	headers.Set("Content-Type", "application/x-protobuf")
+	headers.Set("Content-Encoding", "snappy")
+	headers.Set("X-Prometheus-Remote-Write-Version", "0.1.0")
+	headers.Set("User-Agent", "squirreldb-ingestor/"+version)
+
+	for _, header := range opts.RemoteWriteHeader {
+		name, value, found := strings.Cut(header, "=")
+		if !found || name == "" {
+			return nil, fmt.Errorf("%w: '%s' should have the form 'Name=Value'", errInvalidHeader, header)
+		}
+
+		canonical := http.CanonicalHeaderKey(name)
+		if canonical == "Content-Type" || canonical == "Content-Encoding" ||
+			canonical == "X-Prometheus-Remote-Write-Version" {
+			return nil, fmt.Errorf("%w: '%s' is reserved by the remote write protocol", errInvalidHeader, name)
+		}
+
+		headers.Set(name, value)
 	}
 
-	w.pBuf.Reset()
-
-	err := w.pBuf.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("marshal write request: %w", err)
+	if opts.RemoteWritePassword != "" && opts.RemoteWriteUsername == "" {
+		return nil, fmt.Errorf("%w: a password requires a username", errInvalidAuth)
 	}
 
-	// snappy uses len() to see if it needs to allocate a new slice. Make the
-	// buffer as long as possible.
-	w.buf = w.buf[0:cap(w.buf)]
+	authSources := 0
 
-	// Reuse the buffer allocated by snappy.
-	w.buf = snappy.Encode(w.buf, w.pBuf.Bytes())
-
-	return w.buf, nil
-}
-
-func samplesToTimeseries(samples []sample) []prompb.TimeSeries {
-	series := make([]prompb.TimeSeries, len(samples))
-
-	for nPending, d := range samples {
-		series[nPending].Labels = labelsToLabelsProto(d.labels, series[nPending].Labels)
-		series[nPending].Samples = []prompb.Sample{
-			{
-				Value:     d.value,
-				Timestamp: d.timestamp,
-			},
+	for _, configured := range []bool{
+		opts.RemoteWriteUsername != "",
+		opts.RemoteWriteBearerToken != "",
+		headers.Get("Authorization") != "",
+	} {
+		if configured {
+			authSources++
 		}
 	}
 
-	return series
-}
-
-// labelsToLabelsProto transforms labels into prompb labels. The buffer slice
-// will be used to avoid allocations if it is big enough to store the labels.
-func labelsToLabelsProto(lbls labels.Labels, buf []prompb.Label) []prompb.Label {
-	result := buf[:0]
-
-	if count := lbls.Len(); cap(buf) < count {
-		result = make([]prompb.Label, 0, count)
+	if authSources > 1 {
+		return nil, fmt.Errorf(
+			"%w: use only one of basic auth, a bearer token and an Authorization header", errInvalidAuth,
+		)
 	}
 
-	lbls.Range(func(l labels.Label) {
-		result = append(result, prompb.Label{
-			Name:  l.Name,
-			Value: l.Value,
-		})
-	})
+	if opts.RemoteWriteUsername != "" {
+		(&http.Request{Header: headers}).SetBasicAuth(opts.RemoteWriteUsername, opts.RemoteWritePassword)
+	}
 
-	return result
+	if opts.RemoteWriteBearerToken != "" {
+		headers.Set("Authorization", "Bearer "+opts.RemoteWriteBearerToken)
+	}
+
+	return headers, nil
+}
+
+// Write samples to the configured Prometheus remote write endpoint.
+// Errors that are worth retrying are wrapped in a recoverable error,
+// see isRecoverable; the other errors mean the storage definitively
+// rejected this content.
+func (w *Writer) Write(ctx context.Context, samples []sample) error {
+	w.protoBuf, w.scratch = marshalWriteRequest(w.protoBuf, w.scratch, samples)
+
+	// The request body must not be reused across attempts: net/http may
+	// still read it from another goroutine after Do returns (e.g. on a
+	// timeout), so a shared buffer could be mutated while being read.
+	body := snappy.Encode(nil, w.protoBuf)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, w.url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("create request: %w", err)
+	}
+
+	req.Header = w.headers.Clone()
+
+	start := time.Now()
+
+	resp, err := w.client.Do(req)
+
+	w.metrics.writeDuration.Observe(time.Since(start).Seconds())
+
+	if err != nil {
+		return recoverableError{err: fmt.Errorf("remote write: %w", err)}
+	}
+
+	defer resp.Body.Close()
+
+	return responseError(resp)
+}
+
+// responseError converts an HTTP response to an error, wrapped in a
+// recoverable error when the request can be retried.
+func responseError(resp *http.Response) error {
+	if resp.StatusCode/100 == 2 {
+		// Fully drain the body so the connection can be reused. The client
+		// timeout bounds the read, so a misbehaving server can't block here.
+		_, _ = io.Copy(io.Discard, resp.Body)
+
+		return nil
+	}
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodySize))
+	detail := fmt.Sprintf("status %s: %s", resp.Status, strings.TrimSpace(string(body)))
+
+	// Only 400 and 413 mean the storage refused this content. The other
+	// statuses are treated as recoverable and retried: server errors and
+	// throttling are transient, and the remaining 4xx (401, 403, 404...)
+	// are configuration errors that dropping data would not fix.
+	if resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusRequestEntityTooLarge {
+		return fmt.Errorf("%w: %s", errRequestRejected, detail)
+	}
+
+	return recoverableError{
+		err:        fmt.Errorf("%w: %s", errWriteFailed, detail),
+		retryAfter: parseRetryAfter(resp),
+	}
+}
+
+// parseRetryAfter returns the delay requested by the Retry-After header of
+// the response, or 0.
+func parseRetryAfter(resp *http.Response) time.Duration {
+	value := resp.Header.Get("Retry-After")
+	if value == "" {
+		return 0
+	}
+
+	if seconds, err := strconv.Atoi(value); err == nil && seconds > 0 {
+		return time.Duration(seconds) * time.Second
+	}
+
+	if date, err := http.ParseTime(value); err == nil {
+		if delay := time.Until(date); delay > 0 {
+			return delay
+		}
+	}
+
+	return 0
 }

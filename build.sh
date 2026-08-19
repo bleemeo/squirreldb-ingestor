@@ -36,6 +36,16 @@ fi
 
 COMMIT=`git rev-parse --short HEAD || echo "unknown"`
 
+# goreleaser needs tags to compute the version and the changelog. Use the
+# git tags when they exist, with a fallback for repositories without tags.
+if [ -z "${GORELEASER_CURRENT_TAG}" ]; then
+   GORELEASER_CURRENT_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo 0.1.0)
+fi
+
+if [ -z "${GORELEASER_PREVIOUS_TAG}" ]; then
+   GORELEASER_PREVIOUS_TAG=$(git describe --tags --abbrev=0 "${GORELEASER_CURRENT_TAG}^" 2>/dev/null || echo "${GORELEASER_CURRENT_TAG}")
+fi
+
 if [ "${ONLY_GO}" = "1" -a "${WITH_RACE}" != "1" ]; then
    docker run --rm -e HOME=/go/pkg -e CGO_ENABLED=0 \
       -v $(pwd):/src -w /src ${GO_MOUNT_CACHE} \
@@ -59,8 +69,8 @@ else
       -v $(pwd):/src -w /src ${GO_MOUNT_CACHE} \
       -v /var/run/docker.sock:/var/run/docker.sock \
       --entrypoint '' \
-      -e GORELEASER_PREVIOUS_TAG=0.1.0 \
-      -e GORELEASER_CURRENT_TAG=0.1.1 \
+      -e GORELEASER_PREVIOUS_TAG="${GORELEASER_PREVIOUS_TAG}" \
+      -e GORELEASER_CURRENT_TAG="${GORELEASER_CURRENT_TAG}" \
       goreleaser/goreleaser:${GORELEASER_VERSION} \
       tini -g -- sh -exc "
       mkdir -p /go/pkg

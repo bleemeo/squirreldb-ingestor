@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 480" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif">
+  <style>
+    :root {
+      --bg: #ffffff;
+      --box: #f1f5f9;
+      --stroke: #94a3b8;
+      --text: #0f172a;
+      --muted: #55657a;
+      --accent: #2563eb;
+      --accent-soft: #dbeafe;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0d1117;
+        --box: #161b22;
+        --stroke: #3d444d;
+        --text: #e6edf3;
+        --muted: #9198a1;
+        --accent: #4493f8;
+        --accent-soft: #10233f;
+      }
+    }
+    .bg { fill: var(--bg); }
+    .box { fill: var(--box); stroke: var(--stroke); stroke-width: 1; }
+    .accentbox { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.2; }
+    .groupbox { fill: none; stroke: var(--stroke); stroke-width: 1; stroke-dasharray: 5 4; }
+    .colhead { font-size: 11px; font-weight: 600; letter-spacing: .08em; fill: var(--muted); }
+    .title { font-size: 14px; font-weight: 600; fill: var(--text); }
+    .label { font-size: 12.5px; fill: var(--text); }
+    .muted { font-size: 11px; fill: var(--muted); }
+    .flow { stroke: var(--accent); stroke-width: 1.8; fill: none; marker-end: url(#arrow); }
+    .softflow { stroke: var(--stroke); stroke-width: 1.5; fill: none; marker-end: url(#softarrow); }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/>
+    </marker>
+    <marker id="softarrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="var(--stroke)"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1080" height="480" rx="8"/>
+
+  <!-- Agents -->
+  <text class="colhead" x="109" y="118" text-anchor="middle">SERVERS · VMS · EDGE</text>
+  <rect class="box" x="24" y="136" width="170" height="40" rx="6"/>
+  <text class="label" x="109" y="161" text-anchor="middle">Glouton</text>
+  <rect class="box" x="24" y="186" width="170" height="40" rx="6"/>
+  <text class="label" x="109" y="211" text-anchor="middle">Glouton</text>
+  <rect class="box" x="24" y="236" width="170" height="40" rx="6"/>
+  <text class="label" x="109" y="261" text-anchor="middle">Glouton</text>
+  <text class="muted" x="109" y="298" text-anchor="middle" font-size="16">⋮</text>
+  <text class="muted" x="109" y="322" text-anchor="middle">thousands of agents,</text>
+  <text class="muted" x="109" y="337" text-anchor="middle">outbound connections only</text>
+
+  <!-- Agents -> NATS -->
+  <path class="flow" d="M200,206 L294,206"/>
+  <text class="label" x="248" y="188" text-anchor="middle">MQTT over TLS</text>
+  <text class="muted" x="248" y="226" text-anchor="middle">QoS 1</text>
+
+  <!-- NATS cluster -->
+  <rect class="groupbox" x="300" y="96" width="240" height="280" rx="8"/>
+  <text class="title" x="420" y="124" text-anchor="middle">NATS cluster</text>
+  <text class="muted" x="420" y="141" text-anchor="middle">MQTT broker</text>
+  <rect class="box" x="330" y="156" width="180" height="34" rx="6"/>
+  <text class="label" x="420" y="178" text-anchor="middle">nats-1</text>
+  <rect class="box" x="330" y="198" width="180" height="34" rx="6"/>
+  <text class="label" x="420" y="220" text-anchor="middle">nats-2</text>
+  <rect class="box" x="330" y="240" width="180" height="34" rx="6"/>
+  <text class="label" x="420" y="262" text-anchor="middle">nats-3</text>
+  <text class="label" x="420" y="308" text-anchor="middle">JetStream persistence</text>
+  <text class="muted" x="420" y="326" text-anchor="middle">buffers points during storage</text>
+  <text class="muted" x="420" y="341" text-anchor="middle">or ingestor outages</text>
+
+  <!-- NATS -> ingestors -->
+  <path class="flow" d="M540,196 C580,196 590,168 630,168"/>
+  <path class="flow" d="M540,236 C580,236 590,308 630,308"/>
+  <text class="label" x="588" y="218" text-anchor="middle">subject mapping</text>
+  <text class="muted" x="588" y="234" text-anchor="middle">partitioned by agent</text>
+
+  <!-- Ingestors -->
+  <rect class="accentbox" x="636" y="140" width="210" height="56" rx="8"/>
+  <text class="title" x="741" y="164" text-anchor="middle">SquirrelDB Ingestor</text>
+  <text class="muted" x="741" y="182" text-anchor="middle">partition 0 · stateless</text>
+  <rect class="accentbox" x="636" y="280" width="210" height="56" rx="8"/>
+  <text class="title" x="741" y="304" text-anchor="middle">SquirrelDB Ingestor</text>
+  <text class="muted" x="741" y="322" text-anchor="middle">partition 1 · stateless</text>
+
+  <!-- Ingestors -> storage -->
+  <path class="flow" d="M846,168 C880,168 880,190 902,190"/>
+  <path class="flow" d="M846,308 C880,308 880,230 902,230"/>
+  <text class="label" x="876" y="128" text-anchor="middle">Prometheus</text>
+  <text class="label" x="876" y="143" text-anchor="middle">remote write</text>
+
+  <!-- Storage -->
+  <rect class="box" x="908" y="160" width="150" height="100" rx="8"/>
+  <text class="title" x="983" y="192" text-anchor="middle">SquirrelDB</text>
+  <text class="muted" x="983" y="212" text-anchor="middle">or any remote-write</text>
+  <text class="muted" x="983" y="226" text-anchor="middle">storage: Prometheus,</text>
+  <text class="muted" x="983" y="240" text-anchor="middle">Mimir, VictoriaMetrics…</text>
+
+  <!-- Storage -> Grafana -->
+  <path class="softflow" d="M983,260 L983,294"/>
+  <rect class="box" x="908" y="300" width="150" height="44" rx="8"/>
+  <text class="label" x="983" y="326" text-anchor="middle">Grafana · PromQL</text>
+
+  <!-- Caption -->
+  <text class="muted" x="540" y="446" text-anchor="middle" font-size="12">no inbound port on agents · per-agent ACLs · at-least-once delivery · points queryable in seconds</text>
+</svg>

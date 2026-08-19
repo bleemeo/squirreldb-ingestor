@@ -8,10 +8,13 @@ COPY dist/squirreldb-ingestor_linux_arm_6/squirreldb-ingestor /squirreldb-ingest
 
 RUN cp -p /squirreldb-ingestor.$TARGETARCH /squirreldb-ingestor
 
-FROM gcr.io/distroless/base
+FROM gcr.io/distroless/static:nonroot
 
 LABEL maintainer="Bleemeo Docker Maintainers <packaging-team@bleemeo.com>"
 
 COPY --from=build /squirreldb-ingestor /usr/sbin/squirreldb-ingestor
+
+# HTTP server exposing /metrics and /healthz.
+EXPOSE 8080
 
 CMD ["/usr/sbin/squirreldb-ingestor"]
