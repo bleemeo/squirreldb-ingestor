@@ -31,6 +31,9 @@ linters:
     gomoddirectives:
       replace-allow-list:
         - cloud.google.com/go
+    misspell:
+      ignore-rules:
+        - mosquitto # The Mosquitto MQTT broker, not the insect.
     nolintlint:
       require-specific: true
     revive:
