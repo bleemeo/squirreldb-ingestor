@@ -1,7 +1,7 @@
 version: "2"
 
 run:
-  go: "1.26"
+  go: "1.27"
   timeout: 5m
 
 linters:
@@ -9,6 +9,7 @@ linters:
   disable:
     - cyclop # We use maintidx to lint function complexity.
     - exhaustruct # This linter is meant to be used only for special cases. It is not recommended to use it for all files in a project.
+    - exhaustruct_v5 # Same as exhaustruct.
     - funcorder
     - funlen
     - gocognit # We use maintidx to lint function complexity.
